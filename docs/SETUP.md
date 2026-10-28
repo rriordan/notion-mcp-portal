@@ -24,9 +24,10 @@ Replace `example.com` with a domain on your Cloudflare account and `your-team` w
 git clone https://github.com/<you>/notion-mcp-portal.git
 cd notion-mcp-portal
 npm ci
+cp wrangler.example.jsonc wrangler.jsonc
 ```
 
-Edit `wrangler.jsonc`:
+`wrangler.jsonc` is gitignored, so your hostname and AUD tag stay out of git. Edit it:
 
 - `routes[0].pattern` → `notion.example.com`
 - `ACCESS_TEAM_DOMAIN` → `your-team.cloudflareaccess.com`

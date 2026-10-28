@@ -85,6 +85,7 @@ Things break in specific, non-obvious ways along the way. **[docs/TROUBLESHOOTIN
 
 ```bash
 npm ci
+cp wrangler.example.jsonc wrangler.jsonc   # your config; gitignored
 npm run check   # type-check + wrangler dry-run build
 npm run dev     # local server on test/dev-entry.ts with a fake token
 ```
