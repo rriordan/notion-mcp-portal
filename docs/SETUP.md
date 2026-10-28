@@ -78,9 +78,9 @@ Then **••• → Authenticate**, log in, and wait for status **Ready**. If i
 2. **Require user auth:**
    - **On:** each person runs their own OAuth grant against the server.
    - **Off:** the portal uses the credential from step 4. Required if any agent will connect with a service token (step 7).
-3. Open the portal's Access application (**Applications → your portal → Managed OAuth**) and set its **Allowed redirect URIs** to the callbacks of the clients you'll use. For Claude:
-   - `https://claude.ai/api/mcp/*`
-   - `https://claude.com/api/mcp/*`
+3. Open the portal's Access application (**Applications → your portal → Managed OAuth**) and set its **Allowed redirect URIs** to the callbacks of the clients you'll use:
+   - Claude: `https://claude.ai/api/mcp/*` and `https://claude.com/api/mcp/*`
+   - ChatGPT: `https://chatgpt.com/connector/oauth/*`
 4. Set the portal app's policy to your email, the same as in step 3.
 
 ## 6. Connect a client
