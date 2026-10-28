@@ -1,7 +1,5 @@
 # Troubleshooting
 
-Every one of these happened during the original build.
-
 | Symptom | Cause | Fix |
 |---|---|---|
 | MCP server never reaches **Ready**: status "waiting", authentication "required" | The server's Access app has an empty Managed OAuth redirect allowlist, so the dashboard's OAuth callback is rejected | Add the dashboard callback and `https://<portal-host>/servers-callback` to that app's **Allowed redirect URIs** ([SETUP step 3](SETUP.md#3-protect-the-worker-with-access)) |
@@ -15,13 +13,3 @@ Every one of these happened during the original build.
 | Notion **`restricted_resource`** | The integration lacks a capability | Enable it in the integration's settings |
 | Scripted client gets **403 / error 1010** | Browser Integrity Check is blocking non-browser user agents | Disable BIC only for `/mcp` and the OAuth discovery paths ([SETUP step 8](SETUP.md#8-hardening)) |
 | Server added to the portal but **missing after save** | It was added before the server reached Ready | Wait for Ready, add it again, and confirm via the dashboard or API |
-
-## Anyone can log in
-
-If your Access policy has a login-method rule (e.g. "Google" or "One-time PIN") **next to** your email rule, it lets in anyone who can authenticate with that method. Include rules are OR'd.
-
-Fix: make the policy contain only your email. Control *how* people log in with the app's **identity providers** setting, not with policy rules.
-
-## Agent keepalives in the Access log
-
-An agent connected by service token may log an Access event every few minutes. Many MCP clients ping on a fixed interval (for example every 180 seconds) to keep the session alive. That's a keepalive on one session, not a reconnect loop.

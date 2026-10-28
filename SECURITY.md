@@ -12,6 +12,10 @@ In scope: the Worker code in `src/`, and anything in the docs that would lead so
 
 Out of scope: Cloudflare Access, MCP server portals and the Notion API themselves. Report those to Cloudflare or Notion.
 
+## Keep your Access policy to your email
+
+Access ORs the include rules in a policy. A login-method rule such as "Google" or "One-time PIN" next to your email rule lets in anyone who can sign in that way, not just you. Put only your email in the policy, and pick login methods in the app's **Identity providers** setting instead.
+
 ## If you deploy this
 
 - Never deploy `test/dev-entry.ts`; it skips the Access check.

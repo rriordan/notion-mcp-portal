@@ -46,7 +46,7 @@ At this point every request except `/health` returns 401. That's expected, becau
 
 In Zero Trust → **Access controls → Applications**, add an application of type **MCP server** for `notion.example.com`:
 
-1. **Policy:** allow your own email only. Use the email rule alone, with no login-method rules (see [TROUBLESHOOTING.md](TROUBLESHOOTING.md#anyone-can-log-in)).
+1. **Policy:** allow your own email only. Use the email rule alone, with no login-method rules (see [SECURITY.md](../SECURITY.md#keep-your-access-policy-to-your-email)).
 2. **Managed OAuth:** on, with Dynamic Client Registration on.
 3. **Allowed redirect URIs:** add both of these:
    - `https://dash.cloudflare.com/<account-id>/one/access-controls/ai-controls/mcp-server/oauth-callback/<server-id>` (the dashboard's callback for the MCP server you create in step 4; `<server-id>` is the ID you give it)
