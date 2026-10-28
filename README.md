@@ -10,6 +10,23 @@ A Notion API MCP server on Cloudflare Workers, protected by Cloudflare Access an
 
 I built this so my own agents (Claude, plus a self-hosted agent on a home server) could share one authenticated Notion connection instead of each holding an integration token. Everything here runs in production for me; this repo is the cleaned-up, reusable version.
 
+## Why not just use Notion's official MCP connector?
+
+The official hosted connector is easy to set up and does things this can't (see below). This project makes different trade-offs:
+
+| | Official hosted Notion MCP | notion-mcp-portal |
+|---|---|---|
+| **What the AI can reach** | Everything your Notion account can see (OAuth as you) | Only the pages you share with the integration |
+| **Headless agents** | Per-user OAuth in a browser | Service token: two headers, no browser |
+| **Tool footprint in context** | 67 tools in my connector when I checked (Oct 2026) | 2 tools |
+| **Plan gating** | Some tools and search filters need Business/Enterprise or a "full version" | The public REST API; workspace limits such as file-upload size still apply |
+| **Model steering** | Server instructions tell the model to recommend saving work in Notion and, when a tool needs the "full version", to show an access/next-steps card and put its link in the reply | No server instructions. Tool text only says how to call the API |
+| **Who changes it** | Notion can change tools and instructions at any time | You pin dependency versions and decide when to deploy |
+| **Audit trail** | Notion's | Cloudflare Access logs every connection, plus Worker logs |
+| **Where the Notion credential lives** | An OAuth grant held by each client | One integration token, only inside the Worker; clients hold a revocable Cloudflare grant |
+
+**Use the official connector instead** if you need features the public API doesn't expose: Notion AI search across connected apps, meeting-note transcripts, Notion Calendar, Notion's memory and agent sessions. Also choose it if a team needs per-person Notion permissions, or if you just want zero setup.
+
 ## Architecture
 
 ```mermaid
