@@ -8,7 +8,7 @@ A Notion API MCP server on Cloudflare Workers, protected by Cloudflare Access an
 - **The Notion token never leaves the Worker.** Clients and models never see it.
 - **Runs on the Workers Free plan.** No Durable Objects, no sandbox.
 
-I built this so my own agents (Claude, plus a self-hosted agent on a home server) could share one authenticated Notion connection instead of each holding an integration token. Everything here runs in production for me; this repo is the cleaned-up, reusable version.
+I built this for two reasons: so all my agents (Claude and ChatGPT on the web, plus a self-hosted agent on a home server) could share one authenticated Notion connection instead of each holding an integration token, and to stop running into the official connector's usage limits. Everything here runs in production for me; this repo is the cleaned-up, reusable version.
 
 ## Why not just use Notion's official MCP connector?
 
@@ -20,7 +20,7 @@ The official hosted connector is easy to set up and does things this can't (see 
 | **Headless agents** | Per-user OAuth in a browser | Service token: two headers, no browser |
 | **Tool footprint in context** | 67 tools in my connector when I checked (Oct 2026) | 2 tools |
 | **Plan gating** | Some tools and search filters need Business/Enterprise or a "full version" | The public REST API; workspace limits such as file-upload size still apply |
-| **Model steering** | Its server instructions steer your assistant toward Notion: recommend saving chat work in Notion pages, and when a tool needs a higher plan (the "full version"), show Notion's access/next-steps card and put its link in the reply. So your assistant can end up promoting Notion and its paid plans in its answers | No server instructions. Tool text only says how to call the API |
+| **Model steering** | Upsells built in: its server instructions tell your assistant to suggest saving work in Notion and to link Notion's upgrade card when a tool needs a higher plan | No server instructions. Tool text only says how to call the API |
 | **Rate limits** | Notion's API limits apply to every tool call: 180 requests/min per connection (600 on Business/Enterprise) plus a workspace-wide cap. Retries once if the wait is 2 s or less; otherwise returns `rate_limited`. Plans below Business with Notion AI also get a usage allowance for SQL queries | The same Notion API limits, but all your clients share one integration, so they share its budget. Retries 429s up to twice, honoring `Retry-After` (capped at 10 s). The Workers Free plan adds a cap of 100,000 requests/day |
 | **Who changes it** | Notion can change tools and instructions at any time | You pin dependency versions and decide when to deploy |
 | **Audit trail** | Notion's | Cloudflare Access logs every connection, plus Worker logs |
