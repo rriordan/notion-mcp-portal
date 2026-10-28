@@ -20,7 +20,8 @@ The official hosted connector is easy to set up and does things this can't (see 
 | **Headless agents** | Per-user OAuth in a browser | Service token: two headers, no browser |
 | **Tool footprint in context** | 67 tools in my connector when I checked (Oct 2026) | 2 tools |
 | **Plan gating** | Some tools and search filters need Business/Enterprise or a "full version" | The public REST API; workspace limits such as file-upload size still apply |
-| **Model steering** | Server instructions tell the model to recommend saving work in Notion and, when a tool needs the "full version", to show an access/next-steps card and put its link in the reply | No server instructions. Tool text only says how to call the API |
+| **Model steering** | Its server instructions steer your assistant toward Notion: recommend saving chat work in Notion pages, and when a tool needs a higher plan (the "full version"), show Notion's access/next-steps card and put its link in the reply. So your assistant can end up promoting Notion and its paid plans in its answers | No server instructions. Tool text only says how to call the API |
+| **Rate limits** | Notion's API limits apply to every tool call: 180 requests/min per connection (600 on Business/Enterprise) plus a workspace-wide cap. Retries once if the wait is 2 s or less; otherwise returns `rate_limited`. Plans below Business with Notion AI also get a usage allowance for SQL queries | The same Notion API limits, but all your clients share one integration, so they share its budget. Retries 429s up to twice, honoring `Retry-After` (capped at 10 s). The Workers Free plan adds a cap of 100,000 requests/day |
 | **Who changes it** | Notion can change tools and instructions at any time | You pin dependency versions and decide when to deploy |
 | **Audit trail** | Notion's | Cloudflare Access logs every connection, plus Worker logs |
 | **Where the Notion credential lives** | An OAuth grant held by each client | One integration token, only inside the Worker; clients hold a revocable Cloudflare grant |
@@ -93,17 +94,6 @@ npm run dev     # local server on test/dev-entry.ts with a fake token
 `test/dev-entry.ts` skips the Access check so you can exercise the MCP handler locally. Never deploy it.
 
 `npm run dev` needs the `workerd` binary. If your npm version blocks install scripts, approve `workerd`'s postinstall when npm asks.
-
-## Lessons learned
-
-The code was the easy part. Almost all the debugging was Access configuration:
-
-1. **Managed OAuth needs redirect allowlists on both apps.** The server app must allow the dashboard's server OAuth callback and the portal's `/servers-callback`. The portal app must allow each client's callback. When a list is empty, the failure looks like "authentication required" forever, or "Couldn't register with … sign-in service".
-2. **Access policy rules are OR'd.** A login-method rule ("Google", "One-time PIN") next to an email rule lets in *anyone* who can use that login method. Login methods belong on the app's identity providers; the policy should say *who*.
-3. **Service tokens and per-user OAuth don't mix.** A service token can't complete a per-user OAuth grant, so the portal leaves out servers that require one. Turn the server's *Require user auth* off in the portal for agent access.
-4. **Agents must not try OAuth.** An agent with an OAuth block in its MCP config attempts Dynamic Client Registration and gets `400 invalid_client_metadata: redirect_uri is not allowed`. Send the two service-token headers instead, with no OAuth config.
-5. **Scripted clients can trip Browser Integrity Check** (error 1010). Exempt only `/mcp` and the OAuth discovery paths, not the whole host.
-6. **Add the server to the portal only after it shows Ready.** A save made earlier didn't persist for me.
 
 ## License
 

@@ -4,7 +4,7 @@
 
 Please report it privately through GitHub: **Security → Report a vulnerability** on this repository. Don't open a public issue.
 
-Include what you found, how to reproduce it, and what an attacker could do with it. I'll reply within a week.
+Include what you found, how to reproduce it, and what an attacker could do with it.
 
 ## Scope
 
