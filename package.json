@@ -1,0 +1,27 @@
+{
+  "name": "notion-api-mcp",
+  "description": "Notion API MCP server on Cloudflare Workers, protected by Cloudflare Access and served through an MCP server portal",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "tsc -p tsconfig.json && wrangler deploy --dry-run --outdir dist",
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev -c test/wrangler.test.jsonc --local"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.1",
+    "@modelcontextprotocol/server": "2.3.1",
+    "agents": "0.31.0",
+    "jose": "6.2.13",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261027.1",
+    "typescript": "5.9.3",
+    "wrangler": "4.154.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
