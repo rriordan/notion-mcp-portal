@@ -106,7 +106,7 @@ function buildServer(env: Env): McpServer {
     {
       description:
         "Call the Notion API. Example: { method: 'POST', path: '/v1/search', body: { query: 'Projects', page_size: 10 } }. " +
-        "To read a page's content, use GET /v1/pages/{id}/markdown rather than block children." +
+        "To read a page's content, use GET /v1/pages/{id}/markdown: it returns the whole page in one call." +
         NOTION_NOTES,
       inputSchema: {
         method: z.enum(["GET", "POST", "PATCH", "DELETE"]),
