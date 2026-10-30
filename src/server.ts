@@ -18,6 +18,7 @@ import { text } from "./text";
 export type { Env };
 
 const S = spec as unknown as Spec;
+const MAX_MATCHES = 8; // endpoints returned per notion_find_endpoints search
 const METHODS = ["get", "post", "put", "patch", "delete"] as const;
 
 type Op = {
@@ -66,8 +67,7 @@ function buildServer(env: Env): McpServer {
       description:
         "Find Notion API endpoints. Pass `query` (keywords like 'query data source', 'comments', 'markdown') " +
         "to list matching endpoints, or `operation_id` to get one endpoint's full parameter and request-body schema. " +
-        "Call this before notion_request when unsure of the path or body shape." +
-        NOTION_NOTES,
+        "Returns the top 8 matches. Call this before notion_request when unsure of the path or body shape.",
       inputSchema: {
         query: z.string().optional().describe("Keywords to match against path, summary and operationId"),
         operation_id: z.string().optional().describe("Return the full schema for this operationId"),
@@ -92,7 +92,8 @@ function buildServer(env: Env): McpServer {
         return { o, score: words.length ? words.filter((w) => hay.includes(w)).length : 1 };
       })
         .filter((x) => x.score > 0)
-        .sort((a, b) => b.score - a.score);
+        .sort((a, b) => b.score - a.score)
+        .slice(0, MAX_MATCHES);
       return text(
         scored.map(({ o }) => ({ method: o.method, path: o.path, operationId: o.operationId, summary: o.summary })),
       );

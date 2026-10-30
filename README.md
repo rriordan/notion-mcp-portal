@@ -53,7 +53,7 @@ There are three layers of auth, and each has one job:
 
 | Tool | What it does |
 |---|---|
-| `notion_find_endpoints` | Keyword search over the bundled Notion OpenAPI spec. Pass `operation_id` to get one endpoint's full parameter and body schema, with `$ref`s resolved. |
+| `notion_find_endpoints` | Keyword search over the bundled Notion OpenAPI spec (top 8 matches). Pass `operation_id` to get one endpoint's full parameter and body schema, with `$ref`s resolved. |
 | `notion_request` | Calls any Notion API endpoint (`method`, `path`, `query`, `body`). Sets the right `Notion-Version` per endpoint, retries 429s, and returns Notion's error code and message so the model can self-correct. |
 
 Two generic tools cover the whole API, so the tool list stays small. The model looks an endpoint up, then calls it.
