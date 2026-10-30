@@ -1,6 +1,6 @@
 # Token benchmark
 
-Measures what the model pays, in tokens, for this server's tool definitions and for five typical tool results (`bench/calls.json`). It runs as an MCP client against the local dev server, so it measures the exact text a model receives. Counts come from the Anthropic token-counting API (`claude-opus-5-5` by default).
+Measures what the model pays, in tokens, for this server's tool definitions and for six typical tool results (`bench/calls.json`). It runs as an MCP client against the local dev server, so it measures the exact text a model receives. Counts come from the Anthropic token-counting API (`claude-opus-5-5` by default).
 
 ## Run it
 

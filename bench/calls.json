@@ -2,6 +2,7 @@
   { "name": "users_me", "method": "GET", "path": "/v1/users/me" },
   { "name": "search", "method": "POST", "path": "/v1/search", "body": { "query": "${BENCH_QUERY}", "page_size": 10 } },
   { "name": "page", "method": "GET", "path": "/v1/pages/${BENCH_PAGE_ID}" },
+  { "name": "blocks_children", "method": "GET", "path": "/v1/blocks/${BENCH_PAGE_ID}/children" },
   { "name": "page_markdown", "method": "GET", "path": "/v1/pages/${BENCH_PAGE_ID}/markdown" },
   { "name": "query_data_source", "method": "POST", "path": "/v1/data_sources/${BENCH_DATA_SOURCE_ID}/query", "body": { "page_size": 10 } }
 ]
