@@ -9,7 +9,7 @@
     "deploy": "wrangler deploy",
     "dev": "wrangler dev -c test/wrangler.test.jsonc --local",
     "bench": "node bench/tokens.mjs",
-    "test": "node --test test/body.test.mjs test/text.test.mjs"
+    "test": "node --test test/body.test.mjs test/text.test.mjs test/compact.test.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.1",

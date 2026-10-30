@@ -12,6 +12,7 @@ import { McpServer } from "@modelcontextprotocol/server";
 import { createMcpHandler } from "agents/mcp";
 import { z } from "zod";
 import { parseBody } from "./body";
+import { compactNotion } from "./compact";
 import { type Env, NOTION_NOTES, type Spec, gate, notionRequest, spec } from "./notion";
 import { text } from "./text";
 
@@ -114,11 +115,18 @@ function buildServer(env: Env): McpServer {
           .union([z.record(z.string(), z.unknown()), z.string()])
           .optional()
           .describe("JSON request body object for POST/PATCH"),
+        format: z
+          .enum(["compact", "raw"])
+          .optional()
+          .describe(
+            "compact (default): nulls, ids of properties and options, and rich-text formatting removed; rich text as plain text. raw: Notion's full JSON (exact annotations, option ids)",
+          ),
       },
     },
-    async ({ method, path, query, body }) => {
+    async ({ method, path, query, body, format }) => {
       try {
-        return text(await notionRequest(env, { method, path, query, body: parseBody(body) }));
+        const data = await notionRequest(env, { method, path, query, body: parseBody(body) });
+        return text(format === "raw" ? data : compactNotion(data));
       } catch (e) {
         return text(String(e instanceof Error ? e.message : e), true);
       }
