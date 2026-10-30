@@ -11,6 +11,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createLegacyMcpHandler } from "agents/mcp";
 import { z } from "zod";
+import { parseBody } from "./body";
 import { type Env, NOTION_NOTES, type Spec, gate, notionRequest, spec } from "./notion";
 
 export type { Env };
@@ -115,12 +116,15 @@ function buildServer(env: Env): McpServer {
         method: z.enum(["GET", "POST", "PATCH", "DELETE"]),
         path: z.string().describe("API path starting with /v1/, with ids filled in"),
         query: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
-        body: z.unknown().optional().describe("JSON request body for POST/PATCH"),
+        body: z
+          .union([z.record(z.string(), z.unknown()), z.string()])
+          .optional()
+          .describe("JSON request body object for POST/PATCH"),
       },
     },
     async ({ method, path, query, body }) => {
       try {
-        return text(await notionRequest(env, { method, path, query, body }));
+        return text(await notionRequest(env, { method, path, query, body: parseBody(body) }));
       } catch (e) {
         return text(String(e instanceof Error ? e.message : e), true);
       }

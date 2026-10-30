@@ -21,6 +21,7 @@ jobs:
       # The real wrangler.jsonc is gitignored; build against the example.
       - run: cp wrangler.example.jsonc wrangler.jsonc
       - run: npm run check
+      - run: npm test
 
   gitleaks:
     runs-on: ubuntu-latest
