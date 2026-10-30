@@ -9,6 +9,10 @@ test("a JSON string body becomes the object Notion expects", () => {
   assert.deepEqual(parseBody('{"page_size":50}'), { page_size: 50 });
 });
 
+test("a body encoded as JSON twice is unwrapped to the object", () => {
+  assert.deepEqual(parseBody(JSON.stringify('{"page_size":50}')), { page_size: 50 });
+});
+
 test("an object body is passed through unchanged", () => {
   const body = { filter: { property: "Status", select: { equals: "To Process" } } };
   assert.equal(parseBody(body), body);
