@@ -62,3 +62,15 @@ export function compactNotion(value: unknown): unknown {
   }
   return out;
 }
+
+const BLOCK_CHILDREN = /^\/v1\/blocks\/([^/]+)\/children\/?$/;
+
+/** Reading a page as blocks is verbose; point the model at the Markdown endpoint instead. */
+export function withHint(method: string, path: string, data: unknown): unknown {
+  const m = method === "GET" ? BLOCK_CHILDREN.exec(path) : null;
+  if (!m || !isObj(data)) return data;
+  return {
+    hint: `To read a page's content, GET /v1/pages/${m[1]}/markdown is usually much smaller than block children.`,
+    ...data,
+  };
+}

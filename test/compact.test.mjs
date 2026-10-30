@@ -2,7 +2,7 @@
 // compactNotion trims Notion's response bloat while keeping every value a model needs.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { compactNotion } from "../src/compact.ts";
+import { compactNotion, withHint } from "../src/compact.ts";
 
 const richText = (content, href = null) => ({
   type: "text",
@@ -66,4 +66,11 @@ test("an empty rich-text array becomes an empty string", () => {
 test("lists and scalars pass through", () => {
   assert.deepEqual(compactNotion({ object: "list", results: [page], has_more: false }).results[0].created_by, "u1");
   assert.equal(compactNotion("text"), "text");
+});
+
+test("reading block children adds a hint toward the Markdown endpoint", () => {
+  const out = withHint("GET", "/v1/blocks/abc/children", { object: "list", results: [] });
+  assert.match(out.hint, /GET \/v1\/pages\/abc\/markdown/);
+  assert.deepEqual(withHint("GET", "/v1/pages/abc", { id: "abc" }), { id: "abc" });
+  assert.deepEqual(withHint("PATCH", "/v1/blocks/abc/children", { id: "abc" }), { id: "abc" });
 });

@@ -12,7 +12,7 @@ import { McpServer } from "@modelcontextprotocol/server";
 import { createMcpHandler } from "agents/mcp";
 import { z } from "zod";
 import { parseBody } from "./body";
-import { compactNotion } from "./compact";
+import { compactNotion, withHint } from "./compact";
 import { type Env, NOTION_NOTES, type Spec, gate, notionRequest, spec } from "./notion";
 import { text } from "./text";
 
@@ -105,7 +105,8 @@ function buildServer(env: Env): McpServer {
     "notion_request",
     {
       description:
-        "Call the Notion API. Example: { method: 'POST', path: '/v1/search', body: { query: 'Projects', page_size: 10 } }." +
+        "Call the Notion API. Example: { method: 'POST', path: '/v1/search', body: { query: 'Projects', page_size: 10 } }. " +
+        "To read a page's content, use GET /v1/pages/{id}/markdown rather than block children." +
         NOTION_NOTES,
       inputSchema: {
         method: z.enum(["GET", "POST", "PATCH", "DELETE"]),
@@ -126,7 +127,7 @@ function buildServer(env: Env): McpServer {
     async ({ method, path, query, body, format }) => {
       try {
         const data = await notionRequest(env, { method, path, query, body: parseBody(body) });
-        return text(format === "raw" ? data : compactNotion(data));
+        return text(format === "raw" ? data : withHint(method, path, compactNotion(data)));
       } catch (e) {
         return text(String(e instanceof Error ? e.message : e), true);
       }
