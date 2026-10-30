@@ -33,18 +33,14 @@ const { tools } = await mcp.listTools();
 const results = [];
 for (const call of calls) {
   const { name, ...args } = call;
-  const res = await mcp.callTool({ name: "notion_request", arguments: args });
-  const now = res.content.map((c) => c.text ?? "").join("");
-  if (res.isError) throw new Error(`${name} failed: ${now}`);
-  // "v1.0" = the same JSON indented by 2 spaces, as v1.0 returned it. Results the server
-  // truncated (over 24,000 chars) are no longer valid JSON, so they get no v1.0 figure.
-  let v1 = null;
-  try {
-    v1 = JSON.stringify(JSON.parse(now), null, 2);
-  } catch {
-    /* truncated or non-JSON */
-  }
-  results.push({ name, now, v1 });
+  // Each call twice: format "raw" (Notion's full JSON) and the default compact output.
+  const get = async (format) => {
+    const res = await mcp.callTool({ name: "notion_request", arguments: { ...args, format } });
+    const t = res.content.map((c) => c.text ?? "").join("");
+    if (res.isError) throw new Error(`${name} failed: ${t}`);
+    return t;
+  };
+  results.push({ name, raw: await get("raw"), compact: await get("compact") });
 }
 await mcp.close();
 
@@ -87,28 +83,26 @@ const report = {
   },
   calls: [],
 };
+// The server cuts results at 24,000 chars; a cut result is marked so its size isn't mistaken for the whole.
+const measure = async (t) => ({ chars: t.length, tokens: await textTokens(t), truncated: t.includes("…[truncated ") });
 for (const r of results) {
-  report.calls.push({
-    name: r.name,
-    v1: r.v1 === null ? null : { chars: r.v1.length, tokens: await textTokens(r.v1) },
-    now: { chars: r.now.length, tokens: await textTokens(r.now) },
-  });
+  report.calls.push({ name: r.name, raw: await measure(r.raw), compact: await measure(r.compact) });
 }
 
 // --- Print a Markdown table and save the numbers ------------------------------------
 const unit = COUNT ? "tokens" : "chars";
-const n = (x) => (x === null || x === undefined ? "n/a" : (COUNT ? x.tokens : x.chars)?.toLocaleString("en-US") ?? "n/a");
+const n = (x) => `${(COUNT ? x.tokens : x.chars).toLocaleString("en-US")}${x.truncated ? " (truncated)" : ""}`;
 console.log(`\nTool definitions (${unit}, ${report.model ?? "no count"})\n`);
 console.log("| Server | Tools | Tokens |\n|---|---|---|");
 console.log(`| notion-mcp-portal | ${report.tools.ours.count} | ${report.tools.ours.tokens ?? "n/a"} |`);
 console.log(`| Official connector | ${official ? official.length : "not exported"} | ${report.tools.official?.tokens ?? "n/a"} |`);
 console.log(`\nTool results (${unit})\n`);
-console.log("| Call | v1.0 (indented) | Now | Saved |\n|---|---|---|---|");
+console.log("| Call | Raw | Compact (default) | Saved |\n|---|---|---|---|");
 for (const c of report.calls) {
-  const a = c.v1 && (COUNT ? c.v1.tokens : c.v1.chars);
-  const b = COUNT ? c.now.tokens : c.now.chars;
-  const saved = a ? `${Math.round((1 - b / a) * 100)}%` : "n/a";
-  console.log(`| ${c.name} | ${n(c.v1)} | ${n(c.now)} | ${saved} |`);
+  const a = COUNT ? c.raw.tokens : c.raw.chars;
+  const b = COUNT ? c.compact.tokens : c.compact.chars;
+  const saved = c.raw.truncated ? "n/a (raw truncated)" : `${Math.round((1 - b / a) * 100)}%`;
+  console.log(`| ${c.name} | ${n(c.raw)} | ${n(c.compact)} | ${saved} |`);
 }
 if (COUNT) {
   await writeFile(here("results.json"), JSON.stringify(report, null, 2) + "\n");

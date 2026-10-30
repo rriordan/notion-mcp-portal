@@ -32,4 +32,4 @@ To compare tool-definition size with Notion's hosted connector, save its tool li
 | `BENCH_MCP_URL` | `http://127.0.0.1:8787/mcp` |
 | `BENCH_MODEL` | `claude-opus-5-5` |
 
-"v1.0" is the same result indented by 2 spaces, as v1.0 returned it; "Now" is what the server returns today. Results over 24,000 characters are truncated by the server and get no v1.0 figure.
+Each call runs twice: `format: "raw"` (Notion's full JSON) and the default compact output. Results over 24,000 characters are truncated by the server and marked "(truncated)".
