@@ -13,10 +13,9 @@ import { createLegacyMcpHandler } from "agents/mcp";
 import { z } from "zod";
 import { parseBody } from "./body";
 import { type Env, NOTION_NOTES, type Spec, gate, notionRequest, spec } from "./notion";
+import { text } from "./text";
 
 export type { Env };
-
-const MAX_TEXT = 24_000; // chars returned to the model per call
 
 const S = spec as unknown as Spec;
 const METHODS = ["get", "post", "put", "patch", "delete"] as const;
@@ -56,12 +55,6 @@ function resolveRefs(node: unknown, depth = 0): unknown {
     return resolveRefs(target, depth + 1);
   }
   return Object.fromEntries(Object.entries(obj).map(([k, v]) => [k, resolveRefs(v, depth + 1)]));
-}
-
-function text(value: unknown, isError = false) {
-  let t = typeof value === "string" ? value : JSON.stringify(value, null, 2);
-  if (t.length > MAX_TEXT) t = t.slice(0, MAX_TEXT) + `\n…[truncated ${t.length - MAX_TEXT} chars]`;
-  return { content: [{ type: "text" as const, text: t }], ...(isError ? { isError: true } : {}) };
 }
 
 function buildServer(env: Env): McpServer {
