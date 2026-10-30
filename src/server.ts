@@ -8,8 +8,8 @@
  * Security: a valid Cloudflare Access JWT is required on every request; the Notion
  * token is a Worker secret and never reaches the model.
  */
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { createLegacyMcpHandler } from "agents/mcp";
+import { McpServer } from "@modelcontextprotocol/server";
+import { createMcpHandler } from "agents/mcp";
 import { z } from "zod";
 import { parseBody } from "./body";
 import { type Env, NOTION_NOTES, type Spec, gate, notionRequest, spec } from "./notion";
@@ -129,7 +129,8 @@ function buildServer(env: Env): McpServer {
 
 /** MCP handling after authentication. Exported so a local test entry can exercise it. */
 export function handleMcp(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-  return createLegacyMcpHandler(buildServer(env), { route: "/mcp" })(request, env, ctx);
+  // SDK v2 handler: serves 2026-07-28 clients (server/discover) and 2025-era clients statelessly.
+  return createMcpHandler(() => buildServer(env), { route: "/mcp" })(request, env, ctx);
 }
 
 export default {
