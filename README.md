@@ -18,13 +18,30 @@ The official hosted connector is easy to set up and does things this can't (see 
 |---|---|---|
 | **What the AI can reach** | Everything your Notion account can see (OAuth as you) | Only the pages you share with the integration |
 | **Headless agents** | Per-user OAuth in a browser | Service token: two headers, no browser |
-| **Tool footprint in context** | 67 tools in my connector when I checked (Oct 2026) | 2 tools |
+| **Tool footprint in context** | 67 tools, 74,841 tokens of definitions in my connector (measured Oct 2026) | 2 tools, 1,226 tokens |
 | **Plan gating** | Some tools and search filters need Business/Enterprise or a "full version" | The public REST API; workspace limits such as file-upload size still apply |
 | **Model steering** | Upsells built in: its server instructions tell your assistant to suggest saving work in Notion and to link Notion's upgrade card when a tool needs a higher plan | No server instructions. Tool text only says how to call the API |
 | **Rate limits** | Notion's API limits apply to every tool call: 180 requests/min per connection (600 on Business/Enterprise) plus a workspace-wide cap. Retries once if the wait is 2 s or less; otherwise returns `rate_limited`. Plans below Business with Notion AI also get a usage allowance for SQL queries | The same Notion API limits, on the integration's own budget, separate from the official connector's (both count toward the workspace cap). All your clients share that budget. Retries 429s up to twice, honoring `Retry-After` (capped at 10 s). The Workers Free plan adds a cap of 100,000 requests/day |
 | **Who changes it** | Notion can change tools and instructions at any time | You pin dependency versions and decide when to deploy |
 | **Audit trail** | Notion's | Cloudflare Access logs every connection, plus Worker logs |
 | **Where the Notion credential lives** | An OAuth grant held by each client | One integration token, only inside the Worker; clients hold a revocable Cloudflare grant |
+
+### Measured
+
+Token counts from the Anthropic token-counting API (`claude-opus-5-5`), measured on my workspace on 2026-10-30 with [`npm run bench`](bench/README.md). Your pages will differ.
+
+| What the model reads | Tokens |
+|---|---|
+| Tool definitions: official connector (67 tools) | 74,841 |
+| Tool definitions: notion-mcp-portal (2 tools) | 1,226 |
+
+| Tool result | Raw Notion JSON | Compact (default) | Saved |
+|---|---|---|---|
+| Retrieve a page | 1,033 | 581 | 44% |
+| Query a data source (10 rows) | 10,177 | 5,870 | 42% |
+| Block children (one level) | 3,313 | 2,424 | 27% |
+| Search (10 results) | over the 24,000-character cap, truncated | 8,491 | fits whole |
+| Page as Markdown (whole page) | 4,038 | 4,007 | 1% |
 
 **Use the official connector instead** if you need features the public API doesn't expose: Notion AI search across connected apps, meeting-note transcripts, Notion Calendar, Notion's memory and agent sessions. Also choose it if a team needs per-person Notion permissions, or if you just want zero setup.
 
