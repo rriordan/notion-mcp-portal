@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { propertyValue, valuesNotion } from "../src/values.ts";
-import { shape } from "../src/shape.ts";
+import { isReplayable, shape } from "../src/shape.ts";
 
 const rt = (s) => [{ type: "text", plain_text: s, href: null, annotations: {} }];
 
@@ -57,6 +57,22 @@ test("a page keeps only filled values, under their property names", () => {
       Source: "https://example.com",
     },
   });
+});
+
+test("a relation with more items is flagged with its property id", () => {
+  const big = { ...page, properties: { ...page.properties, Project: { id: "g", type: "relation", relation: [{ id: "proj1" }], has_more: true } } };
+  const out = valuesNotion(big);
+  assert.deepEqual(out.incomplete, { Project: "g" });
+  assert.equal("incomplete" in valuesNotion(page), false);
+});
+
+test("only reads may be repeated for an offset", () => {
+  assert.equal(isReplayable("GET", "/v1/pages/p1/markdown"), true);
+  assert.equal(isReplayable("POST", "/v1/data_sources/ds1/query"), true);
+  assert.equal(isReplayable("POST", "/v1/search"), true);
+  assert.equal(isReplayable("POST", "/v1/pages"), false);
+  assert.equal(isReplayable("PATCH", "/v1/blocks/b1/children"), false);
+  assert.equal(isReplayable("DELETE", "/v1/blocks/b1"), false);
 });
 
 test("a list keeps its cursor and drops the rest of the envelope", () => {

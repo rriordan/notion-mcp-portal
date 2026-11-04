@@ -1,6 +1,15 @@
 import { compactNotion, withHint } from "./compact.ts";
 import { valuesNotion } from "./values.ts";
 
+/** POST endpoints that only read; repeating them (for an offset) changes nothing. */
+const READ_POSTS = [/^\/v1\/search\/?$/, /^\/v1\/(data_sources|databases)\/[^/]+\/query\/?$/];
+
+/** Whether re-sending this request is safe: GET, or a POST that only reads. */
+export function isReplayable(method: string, path: string): boolean {
+  const p = path.split("?")[0];
+  return method === "GET" || (method === "POST" && READ_POSTS.some((re) => re.test(p)));
+}
+
 /**
  * Shape a Notion response for the model. Outside raw, a page's markdown comes back as plain
  * Markdown (not a JSON string full of \n escapes), with Notion's truncation flags kept.

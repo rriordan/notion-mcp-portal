@@ -66,11 +66,16 @@ function isEmpty(v: unknown): boolean {
 
 function pageValues(page: Obj): Obj {
   const props: Obj = {};
+  // Relations with more items than Notion sent: name -> property id, so the model can fetch
+  // the rest with GET /v1/pages/{page_id}/properties/{property_id}.
+  const incomplete: Obj = {};
   for (const [name, prop] of Object.entries(isObj(page.properties) ? page.properties : {})) {
     const v = propertyValue(prop);
     if (!isEmpty(v)) props[name] = v;
+    if (isObj(prop) && prop.has_more === true) incomplete[name] = prop.id;
   }
   const out: Obj = { id: page.id, url: page.url, last_edited_time: page.last_edited_time, props };
+  if (Object.keys(incomplete).length) out.incomplete = incomplete;
   if (page.in_trash === true) out.in_trash = true;
   return out;
 }

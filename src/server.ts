@@ -14,7 +14,7 @@ import { z } from "zod";
 import { parseBody } from "./body";
 import { type Env, NOTION_NOTES, type Spec, gate, notionRequest, spec } from "./notion";
 import { text } from "./text";
-import { shape } from "./shape";
+import { isReplayable, shape } from "./shape";
 
 export type { Env };
 
@@ -127,20 +127,26 @@ function buildServer(env: Env): McpServer {
           .describe(
             "compact (default): nulls, ids of properties and options, and rich-text formatting removed; rich text as plain text. " +
               "values: each page as { id, url, last_edited_time, props: { Name: value } }, empty properties and page metadata left out, " +
-              "formulas and rollups as their computed values; best for reading rows. raw: Notion's full JSON (exact annotations, option ids)",
+              "formulas and rollups as their computed values; best for reading rows. A page's \"incomplete\" maps relation names " +
+              "to property ids whose remaining items come from GET /v1/pages/{id}/properties/{property_id}. raw: Notion's full JSON (exact annotations, option ids)",
           ),
         offset: z
           .number()
           .int()
           .min(0)
           .optional()
-          .describe("Character offset into a long result; use the offset a truncation marker gives"),
+          .describe("Character offset into a long result of a read; use the offset a truncation marker gives"),
       },
     },
     async ({ method, path, query, body, format, offset }) => {
       try {
+        const replayable = isReplayable(method, path);
+        // An offset re-sends the request; never do that for a write (it would run twice).
+        if (offset && !replayable) {
+          return text(`offset is only for reads; ${method} ${path} would change Notion again. Read the result back with a GET.`, true);
+        }
         const data = await notionRequest(env, { method, path, query, body: parseBody(body) });
-        return text(shape(method, path, data, format), false, offset);
+        return text(shape(method, path, data, format), false, offset, replayable);
       } catch (e) {
         return text(String(e instanceof Error ? e.message : e), true);
       }

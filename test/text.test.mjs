@@ -24,6 +24,12 @@ test("offset returns the rest, with nothing lost or repeated", () => {
   assert.equal(out, `…[chars ${MAX_TEXT}–${MAX_TEXT + 4} of ${MAX_TEXT + 4}]\nTAIL`);
 });
 
+test("a cut write result doesn't offer an offset, which would repeat the write", () => {
+  const out = text("x".repeat(MAX_TEXT + 5), false, 0, false).content[0].text;
+  assert.doesNotMatch(out, /offset=/);
+  assert.match(out, /don't repeat it/);
+});
+
 test("an offset past the end returns an empty slice, not an error", () => {
   assert.match(text("short", false, 99).content[0].text, /^…\[chars 5–5 of 5\]\n$/);
 });
@@ -36,7 +42,10 @@ test("a long list keeps whole rows and stays valid JSON", () => {
   const parsed = JSON.parse(out);
   assert.equal(parsed.results.length + parsed.truncated_rows, 10);
   assert.ok(parsed.results.length >= 1);
-  assert.equal(parsed.next_cursor, "c1");
+  // Notion's cursor points past the left-out rows, so following it would skip them.
+  assert.equal("next_cursor" in parsed, false);
+  assert.equal(parsed.has_more, true);
+  assert.match(parsed.hint, /same request/);
   assert.match(parsed.hint, /page_size=\d+/);
 });
 
