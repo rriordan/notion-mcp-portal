@@ -66,6 +66,19 @@ test("a relation with more items is flagged with its property id", () => {
   assert.equal("incomplete" in valuesNotion(page), false);
 });
 
+test("a property-item list keeps its rollup result", () => {
+  const items = {
+    object: "list",
+    results: [{ object: "property_item", type: "relation", relation: { id: "x" } }],
+    next_cursor: null,
+    has_more: false,
+    type: "property_item",
+    property_item: { id: "r", type: "rollup", rollup: { type: "number", number: 42, function: "sum" } },
+  };
+  const out = valuesNotion(items);
+  assert.equal(out.property_item.rollup.number, 42);
+});
+
 test("only reads may be repeated for an offset", () => {
   assert.equal(isReplayable("GET", "/v1/pages/p1/markdown"), true);
   assert.equal(isReplayable("POST", "/v1/data_sources/ds1/query"), true);

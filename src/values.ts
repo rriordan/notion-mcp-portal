@@ -82,7 +82,14 @@ function pageValues(page: Obj): Obj {
 
 export function valuesNotion(value: unknown): unknown {
   if (isObj(value) && value.object === "page" && isObj(value.properties)) return pageValues(value);
-  if (isObj(value) && value.object === "list" && Array.isArray(value.results)) {
+  // Only page lists are reshaped. Other lists (e.g. property items) carry data outside
+  // results, such as a rollup's computed property_item, so they stay compact.
+  if (
+    isObj(value) &&
+    value.object === "list" &&
+    Array.isArray(value.results) &&
+    value.results.every((r) => isObj(r) && r.object === "page")
+  ) {
     const out: Obj = { results: value.results.map(valuesNotion), has_more: value.has_more };
     if (value.next_cursor) out.next_cursor = value.next_cursor;
     return out;
