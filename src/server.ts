@@ -12,9 +12,9 @@ import { McpServer } from "@modelcontextprotocol/server";
 import { createMcpHandler } from "agents/mcp";
 import { z } from "zod";
 import { parseBody } from "./body";
-import { compactNotion, withHint } from "./compact";
 import { type Env, NOTION_NOTES, type Spec, gate, notionRequest, spec } from "./notion";
 import { text } from "./text";
+import { shape } from "./shape";
 
 export type { Env };
 
@@ -58,6 +58,8 @@ function resolveRefs(node: unknown, depth = 0): unknown {
   }
   return Object.fromEntries(Object.entries(obj).map(([k, v]) => [k, resolveRefs(v, depth + 1)]));
 }
+
+const QueryScalar = z.union([z.string(), z.number(), z.boolean()]);
 
 function buildServer(env: Env): McpServer {
   const server = new McpServer({ name: "notion-api", version: "1.0.0" });
@@ -111,23 +113,34 @@ function buildServer(env: Env): McpServer {
       inputSchema: {
         method: z.enum(["GET", "POST", "PATCH", "DELETE"]),
         path: z.string().describe("API path starting with /v1/, with ids filled in"),
-        query: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
+        query: z
+          .record(z.string(), z.union([QueryScalar, z.array(QueryScalar)]))
+          .optional()
+          .describe("Query string; an array repeats the key, e.g. { filter_properties: ['Name', 'Status'] }"),
         body: z
           .union([z.record(z.string(), z.unknown()), z.string()])
           .optional()
           .describe("JSON request body object for POST/PATCH"),
         format: z
-          .enum(["compact", "raw"])
+          .enum(["compact", "values", "raw"])
           .optional()
           .describe(
-            "compact (default): nulls, ids of properties and options, and rich-text formatting removed; rich text as plain text. raw: Notion's full JSON (exact annotations, option ids)",
+            "compact (default): nulls, ids of properties and options, and rich-text formatting removed; rich text as plain text. " +
+              "values: each page as { id, url, last_edited_time, props: { Name: value } }, empty properties and page metadata left out, " +
+              "formulas and rollups as their computed values; best for reading rows. raw: Notion's full JSON (exact annotations, option ids)",
           ),
+        offset: z
+          .number()
+          .int()
+          .min(0)
+          .optional()
+          .describe("Character offset into a long result; use the offset a truncation marker gives"),
       },
     },
-    async ({ method, path, query, body, format }) => {
+    async ({ method, path, query, body, format, offset }) => {
       try {
         const data = await notionRequest(env, { method, path, query, body: parseBody(body) });
-        return text(format === "raw" ? data : withHint(method, path, compactNotion(data)));
+        return text(shape(method, path, data, format), false, offset);
       } catch (e) {
         return text(String(e instanceof Error ? e.message : e), true);
       }
