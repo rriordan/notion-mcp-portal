@@ -9,19 +9,23 @@ const isObj = (v: unknown): v is Obj => typeof v === "object" && v !== null && !
  * is dropped: the model re-sends the same request with a smaller page_size instead, which
  * returns these rows and a cursor that skips nothing.
  */
-function fitList(value: Obj, budget: number): string | null {
+function fitList(value: Obj, budget: number, replayable: boolean): string | null {
   const rows = value.results;
   if (!Array.isArray(rows) || rows.length < 2) return null;
   const { next_cursor: _dropped, ...rest } = value;
   for (let keep = rows.length - 1; keep >= 1; keep--) {
+    const left = `${rows.length - keep} of ${rows.length} rows left out to fit`;
     const out = {
       ...rest,
       results: rows.slice(0, keep),
       has_more: true,
       truncated_rows: rows.length - keep,
-      hint:
-        `${rows.length - keep} of ${rows.length} rows left out to fit, and next_cursor removed because it would skip them. ` +
-        `Re-send this same request with page_size=${keep}, or return less per row (query filter_properties, format "values").`,
+      // A write must never be re-sent to recover rows: it would run again.
+      hint: replayable
+        ? `${left}, and next_cursor removed because it would skip them. ` +
+          `Re-send this same request with page_size=${keep}, or return less per row (query filter_properties, format "values").`
+        : `${left}. This request changed Notion, so don't repeat it; read the result back with a GET, ` +
+          `e.g. GET /v1/blocks/{id}/children for appended blocks.`,
     };
     const t = JSON.stringify(out);
     if (t.length <= budget) return t;
@@ -37,7 +41,7 @@ function fitList(value: Obj, budget: number): string | null {
  */
 export function text(value: unknown, isError = false, offset = 0, replayable = true) {
   let t = typeof value === "string" ? value : JSON.stringify(value);
-  if (offset === 0 && t.length > MAX_TEXT && isObj(value)) t = fitList(value, MAX_TEXT) ?? t;
+  if (offset === 0 && t.length > MAX_TEXT && isObj(value)) t = fitList(value, MAX_TEXT, replayable) ?? t;
   if (offset > 0 || t.length > MAX_TEXT) {
     const total = t.length;
     const start = Math.min(Math.max(0, offset), total);

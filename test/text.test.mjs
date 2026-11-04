@@ -30,6 +30,14 @@ test("a cut write result doesn't offer an offset, which would repeat the write",
   assert.match(out, /don't repeat it/);
 });
 
+test("a cut list from a write says to read back, never to re-send", () => {
+  const row = { id: "b", text: "y".repeat(5000) };
+  const appended = { object: "list", results: Array(20).fill(row), has_more: false };
+  const parsed = JSON.parse(text(appended, false, 0, false).content[0].text);
+  assert.doesNotMatch(parsed.hint, /Re-send|page_size=/);
+  assert.match(parsed.hint, /don't repeat it/);
+});
+
 test("an offset past the end returns an empty slice, not an error", () => {
   assert.match(text("short", false, 99).content[0].text, /^…\[chars 5–5 of 5\]\n$/);
 });
