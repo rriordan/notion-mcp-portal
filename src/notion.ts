@@ -21,7 +21,7 @@ export interface Env {
 export interface NotionRequest {
   method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   path: string;
-  query?: Record<string, string | number | boolean | undefined>;
+  query?: Record<string, string | number | boolean | (string | number | boolean)[] | undefined>;
   body?: unknown;
   contentType?: string;
   rawBody?: boolean;
@@ -92,6 +92,20 @@ export async function verifyAccess(request: Request, env: Env): Promise<string |
 }
 
 // ---------------------------------------------------------------------------
+// Schema cache: GET /v1/databases/{id} and /v1/data_sources/{id} (no query string)
+// are kept for a few minutes per Worker isolate, so repeated schema reads don't spend
+// Notion's rate limit. Any write to the same path clears its entry. In-memory only:
+// it needs no binding and is lost when the isolate is recycled, which is harmless.
+// ---------------------------------------------------------------------------
+const SCHEMA_TTL_MS = 5 * 60_000;
+const SCHEMA_PATH = /^\/v1\/(databases|data_sources)\/[^/]+$/;
+export const schemaCache = new Map<string, { data: unknown; expires: number }>();
+
+function schemaCacheKey(method: string, url: URL): string | null {
+  return method === "GET" && !url.search && SCHEMA_PATH.test(url.pathname) ? url.pathname : null;
+}
+
+// ---------------------------------------------------------------------------
 // Authenticated Notion request (runs on the host, never in a sandbox)
 // ---------------------------------------------------------------------------
 export async function notionRequest(env: Env, opts: NotionRequest): Promise<unknown> {
@@ -101,7 +115,17 @@ export async function notionRequest(env: Env, opts: NotionRequest): Promise<unkn
   const url = new URL(opts.path, NOTION_ORIGIN);
   if (url.origin !== NOTION_ORIGIN) throw new Error("Requests may only go to api.notion.com");
   for (const [k, v] of Object.entries(opts.query ?? {})) {
-    if (v !== undefined) url.searchParams.set(k, String(v));
+    if (v === undefined) continue;
+    // Arrays repeat the key, which is how Notion takes several filter_properties.
+    if (Array.isArray(v)) for (const item of v) url.searchParams.append(k, String(item));
+    else url.searchParams.set(k, String(v));
+  }
+
+  const cacheKey = schemaCacheKey(opts.method, url);
+  if (opts.method !== "GET") schemaCache.delete(url.pathname);
+  else if (cacheKey) {
+    const hit = schemaCache.get(cacheKey);
+    if (hit && hit.expires > Date.now()) return hit.data;
   }
 
   const headers: Record<string, string> = {
@@ -133,6 +157,7 @@ export async function notionRequest(env: Env, opts: NotionRequest): Promise<unkn
       const err = data as { code?: string; message?: string };
       throw new Error(`Notion API ${res.status} ${err?.code ?? ""}: ${err?.message ?? text}`.trim());
     }
+    if (cacheKey) schemaCache.set(cacheKey, { data, expires: Date.now() + SCHEMA_TTL_MS });
     return data;
   }
 }
@@ -144,6 +169,9 @@ Notion API notes:
   (get data source ids from GET /v1/databases/{database_id} -> data_sources[]).
 - For readable page content prefer GET /v1/pages/{id}/markdown; edit it with PATCH /v1/pages/{id}/markdown.
 - List endpoints paginate: pass start_cursor from next_cursor while has_more is true (page_size max 100).
+- Return only the properties you need: query { filter_properties: ["Name", "Status"] } (names or ids)
+  on data source queries and page reads. With format "values" this is the cheapest way to read rows.
+- Long results end with "…[truncated … offset=N]": call again with the same arguments plus offset=N.
 - Only pages/databases shared with the Notion integration are visible.`;
 
 /** Request gate. Returns a Response to short-circuit, or null to continue. */
