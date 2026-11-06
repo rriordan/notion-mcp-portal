@@ -62,7 +62,7 @@ function resolveRefs(node: unknown, depth = 0): unknown {
 const QueryScalar = z.union([z.string(), z.number(), z.boolean()]);
 
 function buildServer(env: Env): McpServer {
-  const server = new McpServer({ name: "notion-api", version: "1.0.0" });
+  const server = new McpServer({ name: "notion-api", version: "1.1.0" });
 
   server.registerTool(
     "notion_find_endpoints",
