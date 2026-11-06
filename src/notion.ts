@@ -171,7 +171,10 @@ Notion API notes:
 - List endpoints paginate: pass start_cursor from next_cursor while has_more is true (page_size max 100).
 - Return only the properties you need: query { filter_properties: ["Name", "Status"] } (names or ids)
   on data source queries and page reads. With format "values" this is the cheapest way to read rows.
-- Long results end with "…[truncated … offset=N]": call again with the same arguments plus offset=N.
+- A long list (such as a query) keeps whole rows and reports truncated_rows plus a hint: re-send the same request
+  with the page_size it names, or use format "values" or filter_properties to shrink each row.
+- Other long results (such as page Markdown) end with "…[truncated … offset=N]": call again with the same
+  arguments plus offset=N.
 - Only pages/databases shared with the Notion integration are visible.`;
 
 /** Request gate. Returns a Response to short-circuit, or null to continue. */
