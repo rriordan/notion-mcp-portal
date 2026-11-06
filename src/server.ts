@@ -135,7 +135,7 @@ function buildServer(env: Env): McpServer {
           .int()
           .min(0)
           .optional()
-          .describe("Character offset into a long result of a read; use the offset a truncation marker gives"),
+          .describe("Character offset into a long non-list result of a read (such as page Markdown); use the offset a truncation marker gives. Long lists are shortened by rows instead; follow their hint"),
       },
     },
     async ({ method, path, query, body, format, offset }) => {
