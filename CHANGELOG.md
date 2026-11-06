@@ -30,6 +30,8 @@ first 8 to 12 rows.
   it twice through MCP, checking for lost cursors, cut rows, duplicates and scan agreement.
 - `test/scan.mjs`: the same walk against a live endpoint (`SCAN_DATA_SOURCE_ID`, rate-limited
   by `SCAN_DELAY_MS`); read-only.
+- `test/scan-endpoints.mjs` (part of `test:e2e`): walks search, block children, comments, page
+  property items and users on the mock (120 wide items each) with the same checks.
 
 ## 1.1.0
 

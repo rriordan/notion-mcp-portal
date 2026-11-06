@@ -14,4 +14,5 @@ for _ in $(seq 1 60); do
   kill -0 "$PID" 2>/dev/null || { echo "wrangler dev exited early:"; cat "$LOG"; exit 1; }
   sleep 1
 done
-SMOKE_MCP_URL="http://127.0.0.1:$PORT/mcp" SCAN_DATA_SOURCE_ID=mock-ds SCAN_DELAY_MS=0 node test/scan.mjs
+SMOKE_MCP_URL="http://127.0.0.1:$PORT/mcp" SCAN_DATA_SOURCE_ID=mock-ds SCAN_DELAY_MS=0 node test/scan.mjs &&
+SMOKE_MCP_URL="http://127.0.0.1:$PORT/mcp" node test/scan-endpoints.mjs
