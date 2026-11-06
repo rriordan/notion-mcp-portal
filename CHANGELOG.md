@@ -36,6 +36,8 @@ no longer cut off silently.
 - `GET` database and data source schemas are cached for 5 minutes per isolate; writes clear
   the cache.
 - `npm run bench`: token counts for tool definitions and typical results. (bdf3e31)
+- `npm run smoke`: read-only live checks of a running server (version, `values` vs `raw`,
+  offset rules, error results, 405s). Setup is in the file header.
 
 ### Fixed
 
