@@ -1,6 +1,6 @@
 {
   "name": "notion-api-mcp",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Notion API MCP server on Cloudflare Workers, protected by Cloudflare Access and served through an MCP server portal",
   "license": "MIT",
   "private": true,
@@ -11,7 +11,8 @@
     "dev": "wrangler dev -c test/wrangler.test.jsonc --local",
     "bench": "node bench/tokens.mjs",
     "smoke": "node test/smoke.mjs",
-    "test": "node --test test/body.test.mjs test/text.test.mjs test/compact.test.mjs test/values.test.mjs"
+    "test:e2e": "bash test/e2e-mock.sh",
+    "test": "node --test test/body.test.mjs test/text.test.mjs test/compact.test.mjs test/values.test.mjs test/paging.test.mjs test/retry.test.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.1",

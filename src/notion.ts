@@ -6,6 +6,8 @@
  */
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import spec from "./notion-openapi.json";
+import { errorTag, fetchWithRetry } from "./retry.ts";
+import { isReplayable } from "./shape.ts";
 
 export { spec };
 
@@ -29,7 +31,6 @@ export interface NotionRequest {
 
 const NOTION_ORIGIN = "https://api.notion.com";
 const DEFAULT_NOTION_VERSION = "2025-09-03";
-const MAX_RETRIES = 2;
 
 // ---------------------------------------------------------------------------
 // Notion-Version per operation (some endpoints, e.g. /markdown, need a newer one)
@@ -138,28 +139,25 @@ export async function notionRequest(env: Env, opts: NotionRequest): Promise<unkn
     body = opts.rawBody ? (opts.body as BodyInit) : JSON.stringify(opts.body);
   }
 
-  for (let attempt = 0; ; attempt++) {
-    const res = await fetch(url, { method: opts.method, headers, body });
-    if (res.status === 429 && attempt < MAX_RETRIES) {
-      const wait = Math.min(Number(res.headers.get("Retry-After") ?? "1"), 10);
-      await new Promise((r) => setTimeout(r, wait * 1000));
-      continue;
-    }
-    const text = await res.text();
-    let data: unknown = text;
-    try {
-      data = JSON.parse(text);
-    } catch {
-      /* non-JSON body */
-    }
-    if (!res.ok) {
-      // Surface Notion's error (code + message) so the model can self-correct.
-      const err = data as { code?: string; message?: string };
-      throw new Error(`Notion API ${res.status} ${err?.code ?? ""}: ${err?.message ?? text}`.trim());
-    }
-    if (cacheKey) schemaCache.set(cacheKey, { data, expires: Date.now() + SCHEMA_TTL_MS });
-    return data;
+  const idempotent = isReplayable(opts.method, url.pathname);
+  const { res } = await fetchWithRetry(() => fetch(url, { method: opts.method, headers, body }), { idempotent });
+  const text = await res.text();
+  let data: unknown = text;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    /* non-JSON body */
   }
+  if (!res.ok) {
+    // Surface Notion's error (code + message) so the model can self-correct.
+    const err = data as { code?: string; message?: string };
+    throw new Error(
+      `Notion API ${res.status} ${err?.code ?? ""}: ${err?.message ?? text}`.trim() +
+        errorTag(res.status, err?.code, res.headers.get("Retry-After"), idempotent),
+    );
+  }
+  if (cacheKey) schemaCache.set(cacheKey, { data, expires: Date.now() + SCHEMA_TTL_MS });
+  return data;
 }
 
 export const NOTION_NOTES = `
@@ -171,8 +169,9 @@ Notion API notes:
 - List endpoints paginate: pass start_cursor from next_cursor while has_more is true (page_size max 100).
 - Return only the properties you need: query { filter_properties: ["Name", "Status"] } (names or ids)
   on data source queries and page reads. With format "values" this is the cheapest way to read rows.
-- A long list (such as a query) keeps whole rows and reports truncated_rows plus a hint: re-send the same request
-  with the page_size it names, or use format "values" or filter_properties to shrink each row.
+- A list too long for one reply is fetched again with a smaller page_size, so you still get whole rows and a
+  next_cursor that skips nothing (page_size_reduced_to says what was used). Keep following next_cursor while
+  has_more is true. Use format "values" or filter_properties to fit more rows per reply.
 - Other long results (such as page Markdown) end with "…[truncated … offset=N]": call again with the same
   arguments plus offset=N.
 - Only pages/databases shared with the Notion integration are visible.`;

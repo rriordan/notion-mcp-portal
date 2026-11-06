@@ -1,5 +1,36 @@
 # Changelog
 
+## 1.2.0
+
+Pagination and error-handling release. Fixes lists that came back with `has_more: true` and
+no `next_cursor`, which scheduled agents read as a broken Notion API and stopped after the
+first 8 to 12 rows.
+
+### Behavior changes (read before upgrading)
+
+- **A list too long for one reply is fetched again with a smaller `page_size`**, and that
+  second response is returned whole. Its rows and `next_cursor` agree, so following the
+  cursor skips nothing. The reply carries `page_size_reduced_to` and a `note`. 1.1.0 instead
+  cut rows after the fact, dropped `next_cursor`, and forced `has_more: true`; that is now
+  only the fallback when no smaller page works (for example, a single row over the cap).
+  Cost: such a call makes two Notion requests the first time; the size that fit is
+  remembered per endpoint in the isolate, so later pages cost one.
+- **429s are retried for every method** (Notion refused the request unrun), honoring
+  `Retry-After`: each wait at most 10 s, at most 3 retries. **502/503/504 and network
+  failures are retried only for reads** (GET, search, queries); a write is never re-sent
+  after it may have run.
+- **Errors end with a tag**, `[class=rate_limited; retryable; retry_after=4s]`, so a caller
+  can tell rate limits, quota (`usage_limit_reached`, not retryable), auth, not-found,
+  conflict, invalid-request, upstream and network failures apart, and knows when a write was
+  not repeated.
+
+### Added
+
+- `npm run test:e2e`: starts the real Worker against a mock Notion (250 wide rows) and walks
+  it twice through MCP, checking for lost cursors, cut rows, duplicates and scan agreement.
+- `test/scan.mjs`: the same walk against a live endpoint (`SCAN_DATA_SOURCE_ID`, rate-limited
+  by `SCAN_DELAY_MS`); read-only.
+
 ## 1.1.0
 
 Token-efficiency release. Tool results are much smaller by default, and long results
