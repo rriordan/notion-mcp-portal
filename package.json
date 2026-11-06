@@ -1,5 +1,6 @@
 {
   "name": "notion-api-mcp",
+  "version": "1.1.0",
   "description": "Notion API MCP server on Cloudflare Workers, protected by Cloudflare Access and served through an MCP server portal",
   "license": "MIT",
   "private": true,
@@ -9,6 +10,7 @@
     "deploy": "wrangler deploy",
     "dev": "wrangler dev -c test/wrangler.test.jsonc --local",
     "bench": "node bench/tokens.mjs",
+    "smoke": "node test/smoke.mjs",
     "test": "node --test test/body.test.mjs test/text.test.mjs test/compact.test.mjs test/values.test.mjs"
   },
   "dependencies": {
