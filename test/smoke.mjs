@@ -1,6 +1,7 @@
 // Live smoke test: read-only checks of a running server (local `npm run dev` or a deployed URL).
 //
 //   SMOKE_MCP_URL=http://127.0.0.1:8787/mcp SMOKE_DATA_SOURCE_ID=<id> node test/smoke.mjs
+// Optional: SMOKE_EXPECT_VERSION=1.2.0, SMOKE_DELAY_MS=2500 (pause before each call).
 //
 // Every Notion call is a GET or a query POST. The one write-shaped call (POST with an offset)
 // must be refused by the server before it reaches Notion. Needs a server with a real NOTION_TOKEN.
@@ -19,7 +20,9 @@ const check = (name, ok, detail = "") => {
 };
 const mcp = new Client({ name: "notion-mcp-smoke", version: "1.0.0" });
 await mcp.connect(new StreamableHTTPClientTransport(new URL(URL_)));
+const DELAY = Number(process.env.SMOKE_DELAY_MS ?? 0); // spacing for runs against production
 const call = async (name, args) => {
+  if (DELAY) await new Promise((r) => setTimeout(r, DELAY));
   const r = await mcp.callTool({ name, arguments: args });
   const t = r.content.map((c) => c.text ?? "").join("");
   let json;
@@ -50,11 +53,18 @@ check("query format=raw keeps full JSON", !raw.r.isError && !!raw.json?.results?
 check("values smaller than raw", vals.t.length < raw.t.length, `${vals.t.length} < ${raw.t.length}`);
 
 const big = await req({ method: "POST", path: q.path, body: { page_size: 100 }, format: "raw" });
-let bigOk = !big.r.isError;
-if (bigOk && big.t.length >= 24000) {
-  check("long raw list is cut on whole rows and stays valid JSON", !!big.json?.results && (big.json.truncated_rows > 0 || big.json.has_more === true), `truncated_rows=${big.json?.truncated_rows}`);
+if (!big.r.isError && big.json?.page_size_reduced_to) {
+  // A raw page of 100 rows is over the reply cap: the server must have fetched a smaller page, whole,
+  // with a cursor that skips nothing.
+  check(
+    "long raw list is re-fetched smaller, whole rows, usable cursor",
+    big.t.length <= 24000 && !big.json.truncated_rows && (!big.json.has_more || !!big.json.next_cursor),
+    `page_size_reduced_to=${big.json.page_size_reduced_to}, ${big.t.length} chars, has_more=${big.json.has_more}`,
+  );
+} else if (!big.r.isError) {
+  check("short raw list has a cursor whenever has_more", !big.json?.has_more || !!big.json?.next_cursor, `${big.t.length} chars`);
 } else {
-  console.log(`SKIP  list truncation (raw page_size=100 was only ${big.t.length} chars; data source too small to hit the cap)`);
+  check("long raw list request succeeded", false, big.t.slice(0, 120));
 }
 
 const slice = await req({ method: "GET", path: "/v1/users/me", offset: 20 });

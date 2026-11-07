@@ -13,6 +13,7 @@ import { createMcpHandler } from "agents/mcp";
 import { z } from "zod";
 import { parseBody } from "./body";
 import { type Env, NOTION_NOTES, type Spec, gate, notionRequest, spec } from "./notion";
+import { fetchFitted, withPageSize } from "./paging";
 import { text } from "./text";
 import { isReplayable, shape } from "./shape";
 
@@ -20,6 +21,8 @@ export type { Env };
 
 const S = spec as unknown as Spec;
 const MAX_MATCHES = 8; // endpoints returned per notion_find_endpoints search
+/** page_size that last fit in one reply, per endpoint. Best effort: lost when the isolate is recycled. */
+const fitHints = new Map<string, number>();
 const METHODS = ["get", "post", "put", "patch", "delete"] as const;
 
 type Op = {
@@ -62,7 +65,7 @@ function resolveRefs(node: unknown, depth = 0): unknown {
 const QueryScalar = z.union([z.string(), z.number(), z.boolean()]);
 
 function buildServer(env: Env): McpServer {
-  const server = new McpServer({ name: "notion-api", version: "1.1.0" });
+  const server = new McpServer({ name: "notion-api", version: "1.2.0" });
 
   server.registerTool(
     "notion_find_endpoints",
@@ -145,7 +148,29 @@ function buildServer(env: Env): McpServer {
         if (offset && !replayable) {
           return text(`offset is only for reads; ${method} ${path} would change Notion again. Read the result back with a GET.`, true);
         }
-        const data = await notionRequest(env, { method, path, query, body: parseBody(body) });
+        const req = { method, path, query, body: parseBody(body) };
+        if (replayable && !offset) {
+          // A long list is re-fetched with a page_size that fits, so its cursor skips nothing.
+          // Remember what fit for this endpoint, so the next page is fetched right the first time.
+          const key = `${method} ${path.split("?")[0]} ${format ?? ""}`;
+          const asked = Number((req.body as { page_size?: unknown } | undefined)?.page_size ?? req.query?.page_size ?? 100);
+          const hint = fitHints.get(key);
+          const startSize = hint && hint < asked ? hint : undefined;
+          const { value, fitted } = await fetchFitted(
+            async (n) => {
+              const r = n === undefined ? req : withPageSize(req, n);
+              return r ? notionRequest(env, r) : null;
+            },
+            (data) => shape(method, path, data, format),
+            { startSize },
+          );
+          if (fitted) {
+            if (fitHints.size >= 200) fitHints.delete(fitHints.keys().next().value as string);
+            fitHints.set(key, fitted);
+          }
+          return text(value, false, offset, replayable);
+        }
+        const data = await notionRequest(env, req);
         return text(shape(method, path, data, format), false, offset, replayable);
       } catch (e) {
         return text(String(e instanceof Error ? e.message : e), true);
