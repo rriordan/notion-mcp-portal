@@ -122,6 +122,22 @@ npm run dev     # local server on test/dev-entry.ts with a fake token
 
 `npm run dev` needs the `workerd` binary. If your npm version blocks install scripts, approve `workerd`'s postinstall when npm asks.
 
+## Releasing
+
+Before merging a release PR, all of these must pass:
+
+1. CI green, plus `npm run check`, `npm test` and `npm run test:e2e` locally.
+2. `npm run smoke` against a local Worker (`SMOKE_EXPECT_VERSION=<new version>`; setup is in the file header).
+3. A live double scan of every list the agents read, with `test/scan.mjs` (`SCAN_DATA_SOURCE_ID`, `SCAN_DELAY_MS` of 1000 or more). Both scans must agree, with no lost cursor, cut row or duplicate. Run it outside scheduled-job windows.
+
+After `wrangler deploy`:
+
+4. An unauthenticated request to `/mcp` returns 401.
+5. `wrangler tail` shows no exceeded-CPU outcomes or exceptions.
+6. One authenticated scan through the portal succeeds. The scheduled agents' next runs are the longer check.
+
+Rollback: redeploy the previous release commit. The deploy ids are in the release notes.
+
 ## License
 
 MIT. `src/notion-openapi.json` comes from [makenotion/notion-mcp-server](https://github.com/makenotion/notion-mcp-server) (MIT); see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
