@@ -18,7 +18,7 @@ The official hosted connector is easy to set up and does things this can't (see 
 |---|---|---|
 | **What the AI can reach** | Everything your Notion account can see (OAuth as you) | Only the pages you share with the integration |
 | **Headless agents** | Per-user OAuth in a browser | Service token: two headers, no browser |
-| **Tool footprint in context** | 67 tools, 74,841 tokens of definitions in my connector (measured Oct 2026) | 2 tools, 1,226 tokens |
+| **Tool footprint in context** | 77 tools, 104,604 tokens of definitions in my connector (measured Nov 2026) | 2 tools, 1,746 tokens |
 | **Plan gating** | Some tools and search filters need Business/Enterprise or a "full version" | The public REST API; workspace limits such as file-upload size still apply |
 | **Model steering** | Upsells built in: its server instructions tell your assistant to suggest saving work in Notion and to link Notion's upgrade card when a tool needs a higher plan | No server instructions. Tool text only says how to call the API |
 | **Rate limits** | Notion's API limits apply to every tool call: 180 requests/min per connection (600 on Business/Enterprise) plus a workspace-wide cap. Retries once if the wait is 2 s or less; otherwise returns `rate_limited`. Plans below Business with Notion AI also get a usage allowance for SQL queries | The same Notion API limits, on the integration's own budget, separate from the official connector's (both count toward the workspace cap). All your clients share that budget. Retries 429s up to twice, honoring `Retry-After` (capped at 10 s). The Workers Free plan adds a cap of 100,000 requests/day |
@@ -28,12 +28,12 @@ The official hosted connector is easy to set up and does things this can't (see 
 
 ### Measured
 
-Token counts from the Anthropic token-counting API (`claude-opus-5-5`), measured on my workspace on 2026-10-30 with [`npm run bench`](bench/README.md). Your pages will differ.
+Token counts from the Anthropic token-counting API (`claude-opus-5-5`), measured on my workspace with [`npm run bench`](bench/README.md). Tool definitions were measured on 2026-11-07 (this server at 1.2.0; the official connector's `tools/list` as my account saw it). The tool-result rows below were measured on 2026-10-30, before 1.2.0 fits long replies to the cap, so they are not comparable with a rerun today. Your pages will differ.
 
 | What the model reads | Tokens |
 |---|---|
-| Tool definitions: official connector (67 tools) | 74,841 |
-| Tool definitions: notion-mcp-portal (2 tools) | 1,226 |
+| Tool definitions: official connector (77 tools) | 104,604 |
+| Tool definitions: notion-mcp-portal (2 tools) | 1,746 |
 
 | Tool result | Raw Notion JSON | Compact (default) | Saved |
 |---|---|---|---|

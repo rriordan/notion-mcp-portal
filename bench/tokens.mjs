@@ -16,12 +16,20 @@ const COUNT = !process.argv.includes("--no-count");
 const here = (p) => new URL(p, import.meta.url);
 
 // --- Load the calls, filling ${VAR} placeholders from the environment -----------------
-const callsText = await readFile(here("calls.json"), "utf8");
-const calls = JSON.parse(
-  callsText.replace(/\$\{(\w+)\}/g, (_, name) => {
-    if (!process.env[name]) throw new Error(`Set ${name} (see bench/README.md)`);
-    return process.env[name];
-  }),
+// BENCH_CALLS="users_me,page" runs only those calls (placeholders of skipped calls need no env vars).
+const only = process.env.BENCH_CALLS?.split(",").map((s) => s.trim()).filter(Boolean);
+const allCalls = JSON.parse(await readFile(here("calls.json"), "utf8"));
+if (only) {
+  const unknown = only.filter((n) => !allCalls.some((c) => c.name === n));
+  if (unknown.length) throw new Error(`BENCH_CALLS names no such call: ${unknown.join(", ")}`);
+}
+const calls = (only ? allCalls.filter((c) => only.includes(c.name)) : allCalls).map((c) =>
+  JSON.parse(
+    JSON.stringify(c).replace(/\$\{(\w+)\}/g, (_, name) => {
+      if (!process.env[name]) throw new Error(`Set ${name} (see bench/README.md)`);
+      return JSON.stringify(process.env[name]).slice(1, -1);
+    }),
+  ),
 );
 
 // --- Fetch our tool definitions and each call's result over MCP ----------------------

@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- `npm run bench`: `BENCH_CALLS=users_me,page` runs only the named calls.
+- README: tool-definition token counts re-measured (this server 1,746; official connector 77 tools, 104,604).
+
 ## 1.2.0
 
 Pagination and error-handling release. Fixes lists that came back with `has_more: true` and
