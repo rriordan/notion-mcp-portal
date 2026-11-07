@@ -43,6 +43,16 @@ Token counts from the Anthropic token-counting API (`claude-opus-5-5`), measured
 | Search (10 results) | over the 24,000-character cap, truncated | 8,491 | fits whole |
 | Page as Markdown (whole page) | 4,038 | 4,007 | 1% |
 
+Complete walks of real lists (1.2.0), measured on my workspace on 2026-11-06 with [`test/scan.mjs`](test/scan.mjs): one request per page at 3 s apart, every page followed by its `next_cursor`, each list walked twice.
+
+| List (compact) | Rows | Pages | Lost cursors | Cut rows | Two walks agree |
+|---|---|---|---|---|---|
+| Tasks | 58 | 6 | 0 | 0 | yes |
+| Findings | 72 | 12 | 0 | 0 | yes |
+| Captures | 201 | 21 | 0 | 0 | yes |
+
+The official connector's rows mode stopped at 100 of the 201 Captures rows with `has_more` set and no cursor to continue. Token sizes above are unchanged from 1.1.0.
+
 **Use the official connector instead** if you need features the public API doesn't expose: Notion AI search across connected apps, meeting-note transcripts, Notion Calendar, Notion's memory and agent sessions. Also choose it if a team needs per-person Notion permissions, or if you just want zero setup.
 
 ## Architecture
