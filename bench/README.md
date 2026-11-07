@@ -31,5 +31,6 @@ To compare tool-definition size with Notion's hosted connector, save its tool li
 |---|---|
 | `BENCH_MCP_URL` | `http://127.0.0.1:8787/mcp` |
 | `BENCH_MODEL` | `claude-opus-5-5` |
+| `BENCH_CALLS` | all calls; e.g. `users_me,page` runs only those (other calls' placeholders need no env vars) |
 
 Each call runs twice: `format: "raw"` (Notion's full JSON) and the default compact output. Results over 24,000 characters are truncated by the server and marked "(truncated)".
