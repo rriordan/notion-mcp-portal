@@ -58,7 +58,12 @@ export async function fetchFitted(
   const size = JSON.stringify(first)?.length ?? 0;
   const rows = isObj(first) && Array.isArray(first.results) ? first.results.length : 0;
   if (size <= budget || rows < 2) {
-    return started && size <= budget ? { value: annotate(first, opts.startSize!), fitted: opts.startSize } : { value: first };
+    if (!started || size > budget) return { value: first };
+    // The note is part of the reply: check the annotated size, not the bare rows. A reply this close to
+    // the cap goes out as fetched, without the note, rather than tip over and lose rows and cursor.
+    const noted = annotate(first, opts.startSize!);
+    if ((JSON.stringify(noted)?.length ?? 0) <= budget) return { value: noted, fitted: opts.startSize };
+    return { value: first };
   }
 
   let keep = Math.max(1, Math.floor(((rows * (budget - OVERHEAD)) / size) * 0.9));

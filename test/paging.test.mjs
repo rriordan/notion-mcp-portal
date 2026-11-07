@@ -105,3 +105,19 @@ test("a stale start size that is now too big is still corrected", async () => {
   assert.equal(calls.length, 2);
   assert.ok(JSON.stringify(out.value).length <= MAX_TEXT);
 });
+
+test("a remembered page_size that fills the cap to the last chars is not pushed over it by the note", async () => {
+  // Rows total just under the cap: adding page_size_reduced_to + note would exceed it.
+  let width = 2000;
+  const make = (w) => ({ object: "list", results: Array.from({ length: 10 }, (_, i) => ({ id: `r${i}`, t: "y".repeat(w) })), has_more: true, next_cursor: "c" });
+  while (JSON.stringify(make(width)).length < MAX_TEXT - 60) width += 1;
+  while (JSON.stringify(make(width)).length > MAX_TEXT - 40) width -= 1;
+  const bare = JSON.stringify(make(width)).length;
+  assert.ok(bare <= MAX_TEXT && bare > MAX_TEXT - 100);
+  const calls = [];
+  const out = await fetchFitted(async (n) => (calls.push(n), make(width)), shape, { startSize: 10 });
+  assert.deepEqual(calls, [10]);
+  assert.ok(JSON.stringify(out.value).length <= MAX_TEXT, "annotated reply must still fit");
+  assert.equal(out.value.next_cursor, "c");
+  assert.equal(out.value.results.length, 10);
+});

@@ -50,6 +50,9 @@ async function scan(label) {
     for (const row of j.results ?? []) ids.push(row.id);
     if (j.page_size_reduced_to) reduced++;
     if (j.truncated_rows) cut++;
+    if (j.truncated_rows || (j.has_more && !j.next_cursor)) {
+      console.log(`  ${label} page ${pages}: rows=${(j.results ?? []).length} chars=${t.length} page_size_reduced_to=${j.page_size_reduced_to ?? "-"} truncated_rows=${j.truncated_rows ?? "-"} has_more=${j.has_more} cursor=${j.next_cursor ? "yes" : "NO"} keys=${Object.keys(j).join(",")}`);
+    }
     if (j.has_more && !j.next_cursor) lostCursor++;
     if (!j.has_more) break;
     if (!j.next_cursor) break;
