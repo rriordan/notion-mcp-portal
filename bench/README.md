@@ -32,5 +32,7 @@ To compare tool-definition size with Notion's hosted connector, save its tool li
 | `BENCH_MCP_URL` | `http://127.0.0.1:8787/mcp` |
 | `BENCH_MODEL` | `claude-opus-5-5` |
 | `BENCH_CALLS` | all calls; e.g. `users_me,page` runs only those (other calls' placeholders need no env vars) |
+| `BENCH_HEADERS` | none; a JSON object of extra request headers, e.g. Cloudflare Access service-token headers for a deployed server |
+| `BENCH_TOOL_PREFIX` | none; set it (e.g. `notion-api_`) when the endpoint is a portal that prefixes each server's tools, so only this server's tools are counted and called |
 
 Each `notion_request` call runs twice: `format: "raw"` (Notion's full JSON) and the default compact output. A call with a `tool` field (`{ "name", "tool", "arguments" }`) goes to that tool once and has no raw column; it is skipped when the server doesn't list the tool. To include `governance_bundle`, add `GOVERNANCE_README_ID=<page id>` to `test/.dev.vars` before `npm run dev`. Results over 24,000 characters are truncated by the server and marked "(truncated)".
