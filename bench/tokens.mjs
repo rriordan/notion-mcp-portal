@@ -35,8 +35,16 @@ const calls = (only ? allCalls.filter((c) => only.includes(c.name)) : allCalls).
 // --- Fetch our tool definitions and each call's result over MCP ----------------------
 // This goes through the real MCP handler, so the text is exactly what a model receives.
 const mcp = new Client({ name: "notion-mcp-portal-bench", version: "1.0.0" });
-await mcp.connect(new StreamableHTTPClientTransport(new URL(MCP_URL)));
-const { tools } = await mcp.listTools();
+// BENCH_HEADERS='{"CF-Access-Client-Id":"...","CF-Access-Client-Secret":"..."}' lets the bench reach a deployed
+// server behind Cloudflare Access; leave it unset for the local dev server.
+const headers = process.env.BENCH_HEADERS ? JSON.parse(process.env.BENCH_HEADERS) : undefined;
+await mcp.connect(new StreamableHTTPClientTransport(new URL(MCP_URL), headers ? { requestInit: { headers } } : undefined));
+// BENCH_TOOL_PREFIX="notion-api_" for a portal that prefixes each server's tools: keep only this server's tools
+// and count them under their own names, so the numbers match the direct server.
+const PREFIX = process.env.BENCH_TOOL_PREFIX ?? "";
+const tools = (await mcp.listTools()).tools
+  .filter((t) => t.name.startsWith(PREFIX))
+  .map((t) => ({ ...t, name: t.name.slice(PREFIX.length) }));
 
 const results = [];
 for (const call of calls) {
@@ -46,7 +54,7 @@ for (const call of calls) {
       console.log(`Skipping ${call.name}: ${call.tool} is not listed by this server`);
       continue;
     }
-    const res = await mcp.callTool({ name: call.tool, arguments: call.arguments ?? {} });
+    const res = await mcp.callTool({ name: PREFIX + call.tool, arguments: call.arguments ?? {} });
     const t = res.content.map((c) => c.text ?? "").join("");
     if (res.isError) throw new Error(`${call.name} failed: ${t}`);
     results.push({ name: call.name, raw: null, compact: t });
@@ -55,7 +63,7 @@ for (const call of calls) {
   const { name, ...args } = call;
   // Each call twice: format "raw" (Notion's full JSON) and the default compact output.
   const get = async (format) => {
-    const res = await mcp.callTool({ name: "notion_request", arguments: { ...args, format } });
+    const res = await mcp.callTool({ name: PREFIX + "notion_request", arguments: { ...args, format } });
     const t = res.content.map((c) => c.text ?? "").join("");
     if (res.isError) throw new Error(`${name} failed: ${t}`);
     return t;

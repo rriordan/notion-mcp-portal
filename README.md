@@ -28,7 +28,7 @@ The official hosted connector is easy to set up and does things this can't (see 
 
 ### Measured
 
-Token counts from the Anthropic token-counting API (`claude-opus-5-5`), measured on my workspace with [`npm run bench`](bench/README.md). Tool definitions were measured on 2026-11-07 for the official connector (its `tools/list` as my account saw it) and on 2026-11-10 for this server (1.3.0, counting the definitions only; `governance_bundle` is listed only when `GOVERNANCE_README_ID` is set). The tool-result rows below were measured on 2026-10-30, before 1.2.0 fits long replies to the cap, so they are not comparable with a rerun today. Your pages will differ.
+Token counts from the Anthropic token-counting API (`claude-opus-5-5`), measured on my workspace with [`npm run bench`](bench/README.md). Tool definitions were measured on 2026-11-07 for the official connector (its `tools/list` as my account saw it) and on 2026-11-10 for this server (1.3.0, counting the definitions only; `governance_bundle` is listed only when `GOVERNANCE_README_ID` is set). The tool-result rows below were measured on 2026-10-30, before 1.2.0 fits long replies to the cap, so they are not comparable with a rerun today, except the `governance_bundle` row, measured on 2026-11-10 against the deployed 1.3.0. Your pages will differ.
 
 | What the model reads | Tokens |
 |---|---|
@@ -43,6 +43,7 @@ Token counts from the Anthropic token-counting API (`claude-opus-5-5`), measured
 | Block children (one level) | 3,313 | 2,424 | 27% |
 | Search (10 results) | over the 24,000-character cap, truncated | 8,491 | fits whole |
 | Page as Markdown (whole page) | 4,038 | 4,007 | 1% |
+| Session-start bundle (`governance_bundle`, no guides or schemas) | n/a | 6,280 | n/a |
 
 Complete walks of real lists (1.2.0), measured on my workspace on 2026-11-06 with [`test/scan.mjs`](test/scan.mjs): one request per page at 3 s apart, every page followed by its `next_cursor`, each list walked twice.
 
