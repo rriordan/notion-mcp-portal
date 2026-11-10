@@ -2,8 +2,44 @@
 
 ## Unreleased
 
+## 1.3.0
+
+Governance release. Adds an optional tool that gives an agent everything it reads from a
+Notion governance setup at session start in one live call. Deployments without the new var
+see no change.
+
+### Added
+
+- **`governance_bundle`** (listed only when `GOVERNANCE_README_ID` is set). One read-only call
+  returns the README page's Markdown, the Activity Log's field list (name, type, options,
+  description), and the `Adopted` Preferences rows for a `scope` plus `Whole workspace`
+  (`Preference`, `Strength`, `Scope` only). Optional `guides` and `schemas` (up to 3 names
+  each) add guide pages and store field lists. Stores and guides are found through the
+  README's own `## Where things go` and `## Guides` tables (by heading and column header), so
+  no IDs live in code. `errors` is always the first key; a part that couldn't be read is
+  `null` with its reason, and only an unreadable README fails the call. `offset` reads a
+  bundle over the 24,000-char cap in parts.
+- **One `notion_call` log line per Notion call** in Workers Logs: method, path, status, `ms`,
+  retries, and whether the schema cache answered. Query strings, bodies and the token are
+  never logged.
+- `test/smoke.mjs`: bundle checks when the tool is listed; `SMOKE_SCOPE` and
+  `SMOKE_EXPECT_BUNDLE=1`. The bench takes a `tool` call type.
 - `npm run bench`: `BENCH_CALLS=users_me,page` runs only the named calls.
-- README: tool-definition token counts re-measured (this server 1,746; official connector 77 tools, 104,604).
+
+### Changed
+
+- `notionRequest` takes `noCache`, which skips the 5-minute schema cache (the bundle always
+  uses it, so a rule edited a minute ago shows up).
+- `src/notion.ts` imports the OpenAPI JSON with `with { type: "json" }` (so `node --test` can
+  load it), and `tsconfig` uses `module: ESNext`.
+- README: tool-definition token counts re-measured (this server 1,746; official connector 77
+  tools, 104,604). Not yet re-measured with `governance_bundle`.
+
+### Fixed
+
+- `test/e2e-mock.sh` left `wrangler` and `workerd` running after every run (the trap killed only
+  the `npx` wrapper), so a later run could test a stale server. It now stops the whole process
+  group.
 
 ## 1.2.0
 
