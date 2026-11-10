@@ -113,6 +113,14 @@ function schemaCacheKey(method: string, url: URL): string | null {
   return method === "GET" && !url.search && SCHEMA_PATH.test(url.pathname) ? url.pathname : null;
 }
 
+/**
+ * One structured line per Notion call, for Workers Logs: where the time goes (Notion, retries,
+ * cache). Path only (no query string, body or headers), so no token or content is logged.
+ */
+function logCall(fields: Record<string, unknown>): void {
+  console.log({ event: "notion_call", ...fields });
+}
+
 // ---------------------------------------------------------------------------
 // Authenticated Notion request (runs on the host, never in a sandbox)
 // ---------------------------------------------------------------------------
@@ -133,7 +141,10 @@ export async function notionRequest(env: Env, opts: NotionRequest): Promise<unkn
   if (opts.method !== "GET") schemaCache.delete(url.pathname);
   else if (cacheKey && !opts.noCache) {
     const hit = schemaCache.get(cacheKey);
-    if (hit && hit.expires > Date.now()) return hit.data;
+    if (hit && hit.expires > Date.now()) {
+      logCall({ method: opts.method, path: url.pathname, cached: true, ms: 0 });
+      return hit.data;
+    }
   }
 
   const headers: Record<string, string> = {
@@ -147,7 +158,15 @@ export async function notionRequest(env: Env, opts: NotionRequest): Promise<unkn
   }
 
   const idempotent = isReplayable(opts.method, url.pathname);
-  const { res } = await fetchWithRetry(() => fetch(url, { method: opts.method, headers, body }), { idempotent });
+  const started = Date.now();
+  let res: Response;
+  let retries: number;
+  try {
+    ({ res, retries } = await fetchWithRetry(() => fetch(url, { method: opts.method, headers, body }), { idempotent }));
+  } catch (e) {
+    logCall({ method: opts.method, path: url.pathname, cached: false, ms: Date.now() - started, status: 0, error: "network" });
+    throw e;
+  }
   const text = await res.text();
   let data: unknown = text;
   try {
@@ -155,9 +174,18 @@ export async function notionRequest(env: Env, opts: NotionRequest): Promise<unkn
   } catch {
     /* non-JSON body */
   }
+  const err = data as { code?: string; message?: string };
+  logCall({
+    method: opts.method,
+    path: url.pathname,
+    cached: false,
+    ms: Date.now() - started,
+    status: res.status,
+    retries,
+    ...(res.ok ? {} : { code: err?.code }),
+  });
   if (!res.ok) {
     // Surface Notion's error (code + message) so the model can self-correct.
-    const err = data as { code?: string; message?: string };
     throw new Error(
       `Notion API ${res.status} ${err?.code ?? ""}: ${err?.message ?? text}`.trim() +
         errorTag(res.status, err?.code, res.headers.get("Retry-After"), idempotent),

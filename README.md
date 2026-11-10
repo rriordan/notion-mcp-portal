@@ -86,6 +86,8 @@ There are three layers of auth, and each has one job:
 
 Two generic tools cover the whole API, so the tool list stays small. The model looks an endpoint up, then calls it. `governance_bundle` is the one purpose-built exception, for a workspace that keeps its agent rules in Notion.
 
+Each Notion call writes one `notion_call` log line (method, path, status, `ms`, retries, whether the schema cache answered) to Workers Logs, so you can see where time goes. Paths include page and data source IDs; query strings, bodies and the token are never logged.
+
 ## Security model
 
 - **Fail closed.** If `ACCESS_TEAM_DOMAIN` or `ACCESS_AUD` is unset, or the `Cf-Access-Jwt-Assertion` doesn't verify against your team's JWKS (issuer and audience), the Worker returns 401. Only `/health` is open.
