@@ -2,7 +2,8 @@
 //
 //   SMOKE_MCP_URL=http://127.0.0.1:8787/mcp SMOKE_DATA_SOURCE_ID=<id> node test/smoke.mjs
 // Optional: SMOKE_EXPECT_VERSION=1.3.0, SMOKE_DELAY_MS=2500 (pause before each call),
-// SMOKE_SCOPE=<a Preferences Scope option> (also checks governance_bundle with that scope).
+// SMOKE_SCOPE=<a Preferences Scope option> (also checks governance_bundle with that scope),
+// SMOKE_EXPECT_BUNDLE=1 (fail if governance_bundle isn't listed, e.g. GOVERNANCE_README_ID was not set).
 //
 // Every Notion call is a GET or a query POST. The one write-shaped call (POST with an offset)
 // must be refused by the server before it reaches Notion. Needs a server with a real NOTION_TOKEN.
@@ -38,6 +39,7 @@ if (WANT_VERSION) check("serverInfo.version", info?.version === WANT_VERSION, `w
 
 const tools = (await mcp.listTools()).tools.map((t) => t.name).sort();
 const BUNDLE = tools.includes("governance_bundle");
+if (process.env.SMOKE_EXPECT_BUNDLE) check("governance_bundle listed", BUNDLE, BUNDLE ? "" : "is GOVERNANCE_README_ID set?");
 check(
   "tools listed",
   tools.join() === (BUNDLE ? "governance_bundle,notion_find_endpoints,notion_request" : "notion_find_endpoints,notion_request"),

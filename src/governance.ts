@@ -67,7 +67,11 @@ type Markdown = { markdown?: unknown; truncated?: unknown; unknown_block_ids?: u
 type Query = { results?: { properties?: Record<string, unknown> }[]; has_more?: boolean; next_cursor?: string | null };
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
-const isCut = (d: Markdown) => Boolean(d?.truncated) || (Array.isArray(d?.unknown_block_ids) && d.unknown_block_ids.length > 0);
+const unrendered = (d: Markdown): string[] =>
+  Array.isArray(d?.unknown_block_ids) ? d.unknown_block_ids.map(String) : [];
+/** Notion's note for blocks it couldn't render (often a child page or block not shared with the integration). */
+const unrenderedNote = (what: string, ids: string[]) =>
+  `Notion didn't render ${ids.length} block(s) of ${what} (not shared with the integration?): ${ids.join(", ")}`;
 
 /**
  * Fetch the README, then everything it points at in parallel. Throws only when the README can't
@@ -88,11 +92,13 @@ export async function buildBundle(
   }
   if (typeof md?.markdown !== "string") throw new Error(`Governance README ${readmeId} returned no markdown`);
   const markdown = md.markdown;
-  const truncated = isCut(md);
+  const truncated = Boolean(md.truncated);
 
   const errors: Bundle["errors"] = [];
   const bundle: Bundle = { errors, readme: { id: readmeId, markdown }, activity_log_fields: null, preferences: null };
   if (truncated) errors.push({ section: "readme", message: README_TRUNCATED });
+  const skipped = unrendered(md);
+  if (skipped.length) errors.push({ section: "readme", message: unrenderedNote("the README", skipped) });
 
   /** Run one section; a resolve or Notion failure becomes an `errors` entry and null. */
   async function section<T>(name: string, work: () => Promise<T>): Promise<T | null> {
@@ -133,9 +139,21 @@ export async function buildBundle(
     const [ds, rows] = await Promise.all([get(`/v1/data_sources/${id}`), queryAll()]);
     const options = scopeOptions(ds);
     if (!options) throw new Error(`${PREFERENCES} has no multi_select '${SCOPE}' property`);
-    const props = (ds as { properties?: Record<string, unknown> })?.properties ?? {};
+    const props = (ds as { properties?: Record<string, { type?: string; select?: { options?: unknown[] } }> })?.properties ?? {};
     const missing = [STATUS, ...PREFERENCE_FIELDS].filter((p) => !(p in props));
     if (missing.length) throw new Error(`${PREFERENCES} is missing propert${missing.length > 1 ? "ies" : "y"}: ${missing.join(", ")}`);
+    // A renamed option would otherwise match nothing and look like "no preferences apply".
+    if (!options.includes(WHOLE_WORKSPACE)) {
+      throw new Error(`${PREFERENCES} '${SCOPE}' has no '${WHOLE_WORKSPACE}' option. Options: ${options.join(", ")}`);
+    }
+    const status = props[STATUS];
+    if (status?.type !== "select") {
+      throw new Error(`${PREFERENCES} '${STATUS}' must be a select property (it is ${status?.type ?? "missing"})`);
+    }
+    const statusOptions = (status.select?.options ?? []).map((o) => (typeof o === "string" ? o : String((o as { name?: unknown })?.name ?? "")));
+    if (!statusOptions.includes(ADOPTED)) {
+      throw new Error(`${PREFERENCES} '${STATUS}' has no '${ADOPTED}' option. Options: ${statusOptions.join(", ")}`);
+    }
     if (scope !== null && !options.includes(scope)) {
       throw new Error(`Unknown scope "${scope}". Valid: ${options.join(", ")}`);
     }
@@ -157,8 +175,11 @@ export async function buildBundle(
       ? named("guides", input.guides, async (n) => {
           const id = must(resolveGuide(markdown, n));
           const g = (await get(`/v1/pages/${id}/markdown`)) as Markdown;
-          if (isCut(g)) errors.push({ section: `guides.${n}`, message: `Notion marked guide "${n}" truncated` });
-          return { id, markdown: typeof g?.markdown === "string" ? g.markdown : "" };
+          if (typeof g?.markdown !== "string") throw new Error(`Guide "${n}" (${id}) returned no markdown`);
+          if (g.truncated) errors.push({ section: `guides.${n}`, message: `Notion marked guide "${n}" truncated` });
+          const gs = unrendered(g);
+          if (gs.length) errors.push({ section: `guides.${n}`, message: unrenderedNote(`guide "${n}"`, gs) });
+          return { id, markdown: g.markdown };
         })
       : undefined,
   ]);

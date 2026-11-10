@@ -180,3 +180,60 @@ test("README failure throws", async () => {
   });
   await assert.rejects(buildBundle("readme", {}, request), /readme.*Notion API 404|Notion API 404.*readme/i);
 });
+
+// ---------------------------------------------------------------------------
+// Final-review fixes: no quietly empty sections
+// ---------------------------------------------------------------------------
+const withOptions = (prop, type, names) => ({
+  ...PREFS_DS,
+  properties: {
+    ...PREFS_DS.properties,
+    [prop]: { ...PREFS_DS.properties[prop], type, [type]: { options: names.map((name) => ({ name })) } },
+  },
+});
+
+test("a missing Whole workspace option errors by name", async () => {
+  const { request } = fakeNotion({
+    [`GET /v1/data_sources/${PREFS_ID}`]: withOptions("Scope", "multi_select", ["Workspace-wide", "Team A"]),
+    [`POST /v1/data_sources/${PREFS_ID}/query`]: { object: "list", results: [], has_more: false, next_cursor: null },
+  });
+  const b = await buildBundle("readme", {}, request);
+  assert.equal(b.preferences, null);
+  assert.match(b.errors.find((x) => x.section === "preferences").message, /Whole workspace/);
+});
+
+test("a missing Adopted option, or a Status that isn't a select, errors by name", async () => {
+  const renamed = fakeNotion({
+    [`GET /v1/data_sources/${PREFS_ID}`]: withOptions("Status", "select", ["Proposed", "Accepted"]),
+  });
+  const a = await buildBundle("readme", {}, renamed.request);
+  assert.equal(a.preferences, null);
+  assert.match(a.errors.find((x) => x.section === "preferences").message, /Adopted/);
+
+  const statusType = fakeNotion({
+    [`GET /v1/data_sources/${PREFS_ID}`]: withOptions("Status", "status", ["Proposed", "Adopted"]),
+  });
+  const s = await buildBundle("readme", {}, statusType.request);
+  assert.equal(s.preferences, null);
+  assert.match(s.errors.find((x) => x.section === "preferences").message, /select/);
+});
+
+test("unrendered README blocks are not reported as truncation", async () => {
+  const { request } = fakeNotion({
+    "GET /v1/pages/readme/markdown": { object: "page_markdown", markdown: README_MD, truncated: false, unknown_block_ids: ["blk-1"] },
+  });
+  const b = await buildBundle("readme", { guides: ["Nope"] }, request);
+  const readmeErrors = b.errors.filter((x) => x.section === "readme");
+  assert.equal(readmeErrors.length, 1);
+  assert.doesNotMatch(readmeErrors[0].message, /truncated/);
+  assert.match(readmeErrors[0].message, /blk-1/);
+  assert.doesNotMatch(b.errors.find((x) => x.section === "guides.Nope").message, /truncated/);
+  assert.ok(b.activity_log_fields && b.preferences);
+});
+
+test("a guide with no markdown errors instead of returning empty", async () => {
+  const { request } = fakeNotion({ [`GET /v1/pages/${GUIDE_ID}/markdown`]: { object: "page" } });
+  const b = await buildBundle("readme", { guides: ["Tool Guide"] }, request);
+  assert.equal(b.guides["Tool Guide"], null);
+  assert.match(b.errors.find((x) => x.section === "guides.Tool Guide").message, /markdown/);
+});
