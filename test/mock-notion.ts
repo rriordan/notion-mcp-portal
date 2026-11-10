@@ -1,5 +1,8 @@
 // LOCAL TESTING ONLY. A stand-in for api.notion.com: one data source with 250 wide rows, paged by
 // page_size and start_cursor like the real one. Used by dev-entry-mock.ts; never deployed.
+import { AL_DS, PREFS_DS } from "./fixtures/datasources.ts";
+import { AL_ID, GUIDE_ID, PREFS_ID, README_MD } from "./fixtures/readme.ts";
+
 const TOTAL = 250;
 const WIDE = 900; // chars of text per row, so 100 rows are far over the reply cap
 
@@ -14,6 +17,24 @@ const row = (i: number) => ({
     Notes: { id: "n", type: "rich_text", rich_text: [{ type: "text", text: { content: "w".repeat(WIDE) }, plain_text: "w".repeat(WIDE) }] },
   },
 });
+
+// governance_bundle: the fixture README, its two stores, one guide and one Preferences page.
+const prefRow = {
+  object: "page",
+  id: "00000000-0000-0000-0000-000000000001",
+  properties: {
+    Preference: { type: "title", title: [{ type: "text", text: { content: "Be brief" }, plain_text: "Be brief" }] },
+    Strength: { type: "select", select: { name: "Guardrail" } },
+    Scope: { type: "multi_select", multi_select: [{ name: "Whole workspace" }] },
+  },
+};
+const GOVERNANCE: Record<string, unknown> = {
+  "GET /v1/pages/mock-readme/markdown": { object: "page_markdown", markdown: README_MD, truncated: false, unknown_block_ids: [] },
+  [`GET /v1/data_sources/${AL_ID}`]: AL_DS,
+  [`GET /v1/data_sources/${PREFS_ID}`]: PREFS_DS,
+  [`POST /v1/data_sources/${PREFS_ID}/query`]: { object: "list", results: [prefRow], next_cursor: null, has_more: false },
+  [`GET /v1/pages/${GUIDE_ID}/markdown`]: { object: "page_markdown", markdown: "# Tool Guide", truncated: false },
+};
 
 export const stats = { notionCalls: 0 };
 
@@ -66,6 +87,11 @@ export async function mockFetch(input: RequestInfo | URL, init?: RequestInit): P
   if (method === "POST" && /^\/v1\/data_sources\/mock-ds\/query$/.test(url.pathname)) {
     stats.notionCalls++;
     return listPage(TOTAL, size, cursor, row, { type: "page_or_data_source", page_or_data_source: {} });
+  }
+  const gov = GOVERNANCE[`${method} ${url.pathname}`];
+  if (gov) {
+    stats.notionCalls++;
+    return json(gov);
   }
   const other = OTHER[`${method} ${url.pathname}`];
   if (other) {

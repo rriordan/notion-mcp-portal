@@ -20,6 +20,8 @@
     // Paste the AUD tag of the Access app that protects the hostname above, then redeploy.
     // Until it's set, every request is rejected (fail closed).
     "ACCESS_AUD": ""
+    // Optional: the Notion page ID of your agents' README. Set it to turn on governance_bundle.
+    // "GOVERNANCE_README_ID": ""
   }
   // Secret (not in this file): npx wrangler secret put NOTION_TOKEN
 }

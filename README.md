@@ -82,8 +82,11 @@ There are three layers of auth, and each has one job:
 |---|---|
 | `notion_find_endpoints` | Keyword search over the bundled Notion OpenAPI spec (top 8 matches). Pass `operation_id` to get one endpoint's full parameter and body schema, with `$ref`s resolved. |
 | `notion_request` | Calls any Notion API endpoint (`method`, `path`, `query`, `body`). Returns compact results by default: nulls, property and option ids, and rich-text formatting are dropped. `format: "values"` returns each row as `{ id, url, last_edited_time, props: { Name: value } }` with empty properties left out and formulas and rollups computed; `format: "raw"` returns Notion's full JSON. Page Markdown comes back as plain Markdown. A list over 24,000 characters is fetched again with a smaller `page_size` (reported as `page_size_reduced_to`), so rows are whole and `next_cursor` skips nothing; other long reads end with a marker giving the `offset` for the next part. A query array repeats the key, so `{ filter_properties: ["Name", "Status"] }` returns only those properties. Sets the right `Notion-Version` per endpoint, retries 429s (and, for reads, 5xx and network failures), caches database and data source schemas for 5 minutes, and returns Notion's error code and message plus a `[class=…; retryable|not retryable]` tag so the model can self-correct. |
+| `governance_bundle` | *Optional; listed only when `GOVERNANCE_README_ID` is set.* One read-only call for what an agent loads at session start: the governance README's Markdown, the Activity Log's field list (name, type, options, description), and the `Adopted` Preferences rows for a `scope` plus `Whole workspace` (`Preference`, `Strength`, `Scope` only). Optional `guides` and `schemas` (up to 3 names each) add guide pages and store field lists. Everything is read live on every call (no schema cache). Stores and guides are found through the README's own tables, so no IDs live in code. `errors` is always the first key: a part that couldn't be read is `null` with its reason there, and an unknown `scope` lists the valid ones. A bundle over 24,000 characters is read in parts with `offset`. |
 
-Two generic tools cover the whole API, so the tool list stays small. The model looks an endpoint up, then calls it.
+Two generic tools cover the whole API, so the tool list stays small. The model looks an endpoint up, then calls it. `governance_bundle` is the one purpose-built exception, for a workspace that keeps its agent rules in Notion.
+
+Each Notion call writes one `notion_call` log line (method, path, status, `ms`, retries, whether the schema cache answered) to Workers Logs, so you can see where time goes. Paths include page and data source IDs; query strings, bodies and the token are never logged.
 
 ## Security model
 
@@ -106,6 +109,16 @@ See **[docs/SETUP.md](docs/SETUP.md)**. In short:
 5. Add it to an MCP server portal and allowlist your clients' callbacks.
 6. Connect Claude (or anything else) to `https://mcp.example.com/mcp`.
 7. Optional: give headless agents a service token.
+8. Optional: set `GOVERNANCE_README_ID` (below) to turn on `governance_bundle`.
+
+### Optional: `governance_bundle`
+
+Set `vars.GOVERNANCE_README_ID` in `wrangler.jsonc` to the Notion page ID of your agents' README, and redeploy. Without it the tool isn't listed, so it costs no tokens. The tool reads two tables from that page, found by heading and by column header (column order doesn't matter):
+
+- `## Where things go`: one row per store. The store's name is the link text in the row (`[Activity Log](https://…)`), and its `Data source` column holds `` `collection://<data source id>` ``. Rows named `Activity Log` and `Preferences` are required.
+- `## Guides`: a `Guide` column of links (`[Tool Guide](https://…/<page id>)`).
+
+Preferences is expected to have a `Status` select (rows with `Adopted` are returned), a `Scope` multi-select (including a `Whole workspace` option), and `Preference` and `Strength` properties. The names are constants at the top of `src/governance.ts` and `src/readme-tables.ts`; change them there if your workspace uses others.
 
 Things break in specific, non-obvious ways along the way. **[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)** lists every one I hit, with the fix.
 

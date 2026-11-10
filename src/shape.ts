@@ -27,3 +27,29 @@ export function shape(method: string, path: string, data: unknown, format?: stri
   }
   return withHint(method, path, format === "values" ? valuesNotion(data) : compactNotion(data));
 }
+
+/** One property of a data source, as an agent needs it: no ids, no colours. */
+export interface Field {
+  name: string;
+  type: string;
+  options?: string[];
+  description?: string;
+}
+
+const OPTION_TYPES = new Set(["select", "multi_select", "status"]);
+
+/** A data source's schema as a short field list: name, type, option names, description when set. */
+export function compactFields(dataSource: unknown): { data_source_id: string; fields: Field[] } {
+  const ds = (dataSource ?? {}) as { id?: unknown; properties?: Record<string, Record<string, unknown>> };
+  const fields: Field[] = Object.entries(ds.properties ?? {}).map(([key, p]) => {
+    const type = String(p?.type ?? "");
+    const f: Field = { name: typeof p?.name === "string" ? p.name : key, type };
+    const opts = (p?.[type] as { options?: unknown[] } | undefined)?.options;
+    if (OPTION_TYPES.has(type) && Array.isArray(opts)) {
+      f.options = opts.map((o) => (typeof o === "string" ? o : String((o as { name?: unknown })?.name ?? "")));
+    }
+    if (typeof p?.description === "string" && p.description.trim()) f.description = p.description;
+    return f;
+  });
+  return { data_source_id: String(ds.id ?? ""), fields };
+}

@@ -15,6 +15,7 @@ import { parseBody } from "./body";
 import { type Env, NOTION_NOTES, type Spec, gate, notionRequest, spec } from "./notion";
 import { fetchFitted, withPageSize } from "./paging";
 import { text } from "./text";
+import { buildBundle } from "./governance";
 import { isReplayable, shape } from "./shape";
 
 export type { Env };
@@ -65,7 +66,7 @@ function resolveRefs(node: unknown, depth = 0): unknown {
 const QueryScalar = z.union([z.string(), z.number(), z.boolean()]);
 
 function buildServer(env: Env): McpServer {
-  const server = new McpServer({ name: "notion-api", version: "1.2.0" });
+  const server = new McpServer({ name: "notion-api", version: "1.3.0" });
 
   server.registerTool(
     "notion_find_endpoints",
@@ -177,6 +178,32 @@ function buildServer(env: Env): McpServer {
       }
     },
   );
+
+  const readmeId = env.GOVERNANCE_README_ID?.trim();
+  if (readmeId) {
+    server.registerTool(
+      "governance_bundle",
+      {
+        description:
+          "Session-start governance in one call: the workspace README, Activity Log field rules, and Adopted Preferences " +
+          "for a Scope (Evidence omitted), read live. Optional: named guides or store schemas.",
+        inputSchema: {
+          scope: z.string().optional().describe("Preferences Scope option; omitted = Whole workspace rows only"),
+          guides: z.array(z.string()).max(3).optional().describe("Guide names from the README's Guides table"),
+          schemas: z.array(z.string()).max(3).optional().describe("Store names from the README's Where things go table"),
+          offset: z.number().int().min(0).optional().describe("Character offset from a truncation marker"),
+        },
+      },
+      async ({ scope, guides, schemas, offset }) => {
+        try {
+          // Read live on every call, offset included, so a later part never mixes in stale content.
+          return text(await buildBundle(readmeId, { scope, guides, schemas }, (r) => notionRequest(env, r)), false, offset);
+        } catch (e) {
+          return text(String(e instanceof Error ? e.message : e), true);
+        }
+      },
+    );
+  }
 
   return server;
 }

@@ -4,5 +4,6 @@
   { "name": "page", "method": "GET", "path": "/v1/pages/${BENCH_PAGE_ID}" },
   { "name": "blocks_children", "method": "GET", "path": "/v1/blocks/${BENCH_PAGE_ID}/children" },
   { "name": "page_markdown", "method": "GET", "path": "/v1/pages/${BENCH_PAGE_ID}/markdown" },
-  { "name": "query_data_source", "method": "POST", "path": "/v1/data_sources/${BENCH_DATA_SOURCE_ID}/query", "body": { "page_size": 10 } }
+  { "name": "query_data_source", "method": "POST", "path": "/v1/data_sources/${BENCH_DATA_SOURCE_ID}/query", "body": { "page_size": 10 } },
+  { "name": "governance_bundle", "tool": "governance_bundle", "arguments": {} }
 ]

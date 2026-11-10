@@ -40,6 +40,18 @@ const { tools } = await mcp.listTools();
 
 const results = [];
 for (const call of calls) {
+  // A call with "tool" goes to that tool once, with "arguments" (no raw/compact pair to compare).
+  if (call.tool) {
+    if (!tools.some((t) => t.name === call.tool)) {
+      console.log(`Skipping ${call.name}: ${call.tool} is not listed by this server`);
+      continue;
+    }
+    const res = await mcp.callTool({ name: call.tool, arguments: call.arguments ?? {} });
+    const t = res.content.map((c) => c.text ?? "").join("");
+    if (res.isError) throw new Error(`${call.name} failed: ${t}`);
+    results.push({ name: call.name, raw: null, compact: t });
+    continue;
+  }
   const { name, ...args } = call;
   // Each call twice: format "raw" (Notion's full JSON) and the default compact output.
   const get = async (format) => {
@@ -94,7 +106,7 @@ const report = {
 // The server cuts results at 24,000 chars; a cut result is marked so its size isn't mistaken for the whole.
 const measure = async (t) => ({ chars: t.length, tokens: await textTokens(t), truncated: t.includes("…[truncated ") });
 for (const r of results) {
-  report.calls.push({ name: r.name, raw: await measure(r.raw), compact: await measure(r.compact) });
+  report.calls.push({ name: r.name, raw: r.raw === null ? null : await measure(r.raw), compact: await measure(r.compact) });
 }
 
 // --- Print a Markdown table and save the numbers ------------------------------------
@@ -107,6 +119,10 @@ console.log(`| Official connector | ${official ? official.length : "not exported
 console.log(`\nTool results (${unit})\n`);
 console.log("| Call | Raw | Compact (default) | Saved |\n|---|---|---|---|");
 for (const c of report.calls) {
+  if (!c.raw) {
+    console.log(`| ${c.name} | n/a | ${n(c.compact)} | n/a |`);
+    continue;
+  }
   const a = COUNT ? c.raw.tokens : c.raw.chars;
   const b = COUNT ? c.compact.tokens : c.compact.chars;
   const saved = c.raw.truncated ? "n/a (raw truncated)" : `${Math.round((1 - b / a) * 100)}%`;

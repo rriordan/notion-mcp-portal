@@ -1,7 +1,9 @@
 // Live smoke test: read-only checks of a running server (local `npm run dev` or a deployed URL).
 //
 //   SMOKE_MCP_URL=http://127.0.0.1:8787/mcp SMOKE_DATA_SOURCE_ID=<id> node test/smoke.mjs
-// Optional: SMOKE_EXPECT_VERSION=1.2.0, SMOKE_DELAY_MS=2500 (pause before each call).
+// Optional: SMOKE_EXPECT_VERSION=1.3.0, SMOKE_DELAY_MS=2500 (pause before each call),
+// SMOKE_SCOPE=<a Preferences Scope option> (also checks governance_bundle with that scope),
+// SMOKE_EXPECT_BUNDLE=1 (fail if governance_bundle isn't listed, e.g. GOVERNANCE_README_ID was not set).
 //
 // Every Notion call is a GET or a query POST. The one write-shaped call (POST with an offset)
 // must be refused by the server before it reaches Notion. Needs a server with a real NOTION_TOKEN.
@@ -36,7 +38,43 @@ check("serverInfo", info?.name === "notion-api", `${info?.name}@${info?.version}
 if (WANT_VERSION) check("serverInfo.version", info?.version === WANT_VERSION, `want ${WANT_VERSION}`);
 
 const tools = (await mcp.listTools()).tools.map((t) => t.name).sort();
-check("tools listed", tools.join() === "notion_find_endpoints,notion_request", tools.join());
+const BUNDLE = tools.includes("governance_bundle");
+if (process.env.SMOKE_EXPECT_BUNDLE) check("governance_bundle listed", BUNDLE, BUNDLE ? "" : "is GOVERNANCE_README_ID set?");
+check(
+  "tools listed",
+  tools.join() === (BUNDLE ? "governance_bundle,notion_find_endpoints,notion_request" : "notion_find_endpoints,notion_request"),
+  tools.join(),
+);
+
+if (BUNDLE) {
+  // The whole bundle, reassembled from offset parts when it is over the reply cap.
+  const bundle = async (args) => {
+    let all = "";
+    let offset = 0;
+    for (let parts = 0; parts < 20; parts++) {
+      const { r, t } = await call("governance_bundle", { ...args, ...(offset ? { offset } : {}) });
+      if (r.isError) return { error: t };
+      const next = t.match(/\n…\[truncated: \d+ more chars\. Call again with the same arguments and offset=(\d+)\]$/);
+      all += t.replace(/^…\[chars \d+–\d+ of \d+\]\n/, "").replace(/\n…\[truncated: [^\]]*\]$/, "");
+      if (!next) break;
+      offset = Number(next[1]);
+    }
+    try { return { json: JSON.parse(all), chars: all.length }; } catch { return { error: `not JSON: ${all.slice(0, 120)}` }; }
+  };
+  const b = await bundle({});
+  check("governance_bundle: no errors", !b.error && b.json.errors.length === 0, b.error ?? `${b.chars} chars ${JSON.stringify(b.json.errors).slice(0, 200)}`);
+  check("governance_bundle: README markdown", typeof b.json?.readme?.markdown === "string" && b.json.readme.markdown.length > 0);
+  check("governance_bundle: field rules have descriptions", !!b.json?.activity_log_fields?.fields?.some((f) => f.description));
+  const SCOPE = process.env.SMOKE_SCOPE;
+  if (SCOPE) {
+    const s = await bundle({ scope: SCOPE });
+    check(
+      "governance_bundle: scoped preferences",
+      !s.error && s.json.preferences?.scope === SCOPE && s.json.errors.length === 0,
+      s.error ?? `${s.json.preferences?.rows?.length} rows`,
+    );
+  }
+}
 
 const eps = await call("notion_find_endpoints", { query: "" });
 check("find_endpoints caps at 8", (eps.t.match(/"path"/g) ?? []).length <= 8, `${(eps.t.match(/"path"/g) ?? []).length} paths`);
