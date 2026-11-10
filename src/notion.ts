@@ -18,6 +18,11 @@ export interface Env {
   ACCESS_TEAM_DOMAIN: string;
   /** Application Audience (AUD) tag of the Access app protecting this Worker. */
   ACCESS_AUD: string;
+  /**
+   * Optional: Notion page ID of the workspace's governance README. When set, the
+   * governance_bundle tool is registered; it resolves stores and guides from that page's tables.
+   */
+  GOVERNANCE_README_ID?: string;
 }
 
 export interface NotionRequest {

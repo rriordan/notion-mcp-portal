@@ -3,5 +3,5 @@
   "main": "dev-entry-mock.ts",
   "compatibility_date": "2026-10-27",
   "compatibility_flags": ["nodejs_compat"],
-  "vars": { "NOTION_TOKEN": "ntn_fake_token_for_local_test" }
+  "vars": { "NOTION_TOKEN": "ntn_fake_token_for_local_test", "GOVERNANCE_README_ID": "mock-readme" }
 }

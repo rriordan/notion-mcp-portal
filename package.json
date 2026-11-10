@@ -1,6 +1,6 @@
 {
   "name": "notion-api-mcp",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Notion API MCP server on Cloudflare Workers, protected by Cloudflare Access and served through an MCP server portal",
   "license": "MIT",
   "private": true,

@@ -15,4 +15,5 @@ for _ in $(seq 1 60); do
   sleep 1
 done
 SMOKE_MCP_URL="http://127.0.0.1:$PORT/mcp" SCAN_DATA_SOURCE_ID=mock-ds SCAN_DELAY_MS=0 node test/scan.mjs &&
-SMOKE_MCP_URL="http://127.0.0.1:$PORT/mcp" node test/scan-endpoints.mjs
+SMOKE_MCP_URL="http://127.0.0.1:$PORT/mcp" node test/scan-endpoints.mjs &&
+SMOKE_MCP_URL="http://127.0.0.1:$PORT/mcp" node test/bundle-e2e.mjs
