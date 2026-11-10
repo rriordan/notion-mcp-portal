@@ -36,6 +36,10 @@ if (process.env.BUNDLE_EXPECT === "absent") {
     check("field rules carry descriptions", Boolean(b?.activity_log_fields?.fields?.some((f) => f.description)));
     check("preferences rows without Evidence", Array.isArray(b?.preferences?.rows) && b.preferences.rows.length > 0 && !("Evidence" in b.preferences.rows[0]));
 
+    // A bundle over the reply cap is read in parts, like notion_request: offset returns the rest.
+    const part = await call({ offset: 10 });
+    check("offset returns the rest of the bundle", !part.isError && part.raw.startsWith("…[chars 10–") && part.raw.endsWith(clean.raw.slice(10)), part.raw.slice(0, 60));
+
     const bad = await call({ scope: "Nope" });
     let nb = null;
     try {

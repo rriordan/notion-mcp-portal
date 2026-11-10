@@ -1,6 +1,6 @@
 # Token benchmark
 
-Measures what the model pays, in tokens, for this server's tool definitions and for six typical tool results (`bench/calls.json`). It runs as an MCP client against the local dev server, so it measures the exact text a model receives. Counts come from the Anthropic token-counting API (`claude-opus-5-5` by default).
+Measures what the model pays, in tokens, for this server's tool definitions and for six typical tool results (`bench/calls.json`), plus one `governance_bundle` call when the server lists that tool. It runs as an MCP client against the local dev server, so it measures the exact text a model receives. Counts come from the Anthropic token-counting API (`claude-opus-5-5` by default).
 
 ## Run it
 
@@ -33,4 +33,4 @@ To compare tool-definition size with Notion's hosted connector, save its tool li
 | `BENCH_MODEL` | `claude-opus-5-5` |
 | `BENCH_CALLS` | all calls; e.g. `users_me,page` runs only those (other calls' placeholders need no env vars) |
 
-Each call runs twice: `format: "raw"` (Notion's full JSON) and the default compact output. Results over 24,000 characters are truncated by the server and marked "(truncated)".
+Each `notion_request` call runs twice: `format: "raw"` (Notion's full JSON) and the default compact output. A call with a `tool` field (`{ "name", "tool", "arguments" }`) goes to that tool once and has no raw column; it is skipped when the server doesn't list the tool. To include `governance_bundle`, add `GOVERNANCE_README_ID=<page id>` to `test/.dev.vars` before `npm run dev`. Results over 24,000 characters are truncated by the server and marked "(truncated)".

@@ -191,11 +191,13 @@ function buildServer(env: Env): McpServer {
           scope: z.string().optional().describe("Preferences Scope option; omitted = Whole workspace rows only"),
           guides: z.array(z.string()).max(3).optional().describe("Guide names from the README's Guides table"),
           schemas: z.array(z.string()).max(3).optional().describe("Store names from the README's Where things go table"),
+          offset: z.number().int().min(0).optional().describe("Character offset from a truncation marker"),
         },
       },
-      async ({ scope, guides, schemas }) => {
+      async ({ scope, guides, schemas, offset }) => {
         try {
-          return text(await buildBundle(readmeId, { scope, guides, schemas }, (r) => notionRequest(env, r)));
+          // Read live on every call, offset included, so a later part never mixes in stale content.
+          return text(await buildBundle(readmeId, { scope, guides, schemas }, (r) => notionRequest(env, r)), false, offset);
         } catch (e) {
           return text(String(e instanceof Error ? e.message : e), true);
         }
