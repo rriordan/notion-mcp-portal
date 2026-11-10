@@ -5,7 +5,7 @@
  *  - Authenticated Notion API request (token never leaves this Worker)
  */
 import { createRemoteJWKSet, jwtVerify } from "jose";
-import spec from "./notion-openapi.json";
+import spec from "./notion-openapi.json" with { type: "json" };
 import { errorTag, fetchWithRetry } from "./retry.ts";
 import { isReplayable } from "./shape.ts";
 
@@ -27,6 +27,8 @@ export interface NotionRequest {
   body?: unknown;
   contentType?: string;
   rawBody?: boolean;
+  /** Skip the schema-cache read (the fresh result is still stored). For reads that must be live. */
+  noCache?: boolean;
 }
 
 const NOTION_ORIGIN = "https://api.notion.com";
@@ -124,7 +126,7 @@ export async function notionRequest(env: Env, opts: NotionRequest): Promise<unkn
 
   const cacheKey = schemaCacheKey(opts.method, url);
   if (opts.method !== "GET") schemaCache.delete(url.pathname);
-  else if (cacheKey) {
+  else if (cacheKey && !opts.noCache) {
     const hit = schemaCache.get(cacheKey);
     if (hit && hit.expires > Date.now()) return hit.data;
   }
