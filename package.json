@@ -12,7 +12,7 @@
     "bench": "node bench/tokens.mjs",
     "smoke": "node test/smoke.mjs",
     "test:e2e": "bash test/e2e-mock.sh",
-    "test": "node --test test/nocache.test.mjs test/body.test.mjs test/text.test.mjs test/compact.test.mjs test/values.test.mjs test/paging.test.mjs test/retry.test.mjs"
+    "test": "node --test test/nocache.test.mjs test/readme-tables.test.mjs test/body.test.mjs test/text.test.mjs test/compact.test.mjs test/values.test.mjs test/paging.test.mjs test/retry.test.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.1",
