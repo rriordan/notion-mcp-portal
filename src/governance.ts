@@ -7,6 +7,7 @@
 import type { NotionRequest } from "./notion.ts";
 import { resolveGuide, resolveStore, type Resolved } from "./readme-tables.ts";
 import { compactFields, type Field } from "./shape.ts";
+import { MAX_TEXT } from "./text.ts";
 import { propertyValue } from "./values.ts";
 
 export const ACTIVITY_LOG = "Activity Log";
@@ -43,10 +44,16 @@ export function preferencesRequest(dataSourceId: string, scope: string | null, c
   };
 }
 
+/** The core sections, in output order. A call returns all of them unless `sections` says otherwise. */
+export const SECTIONS = ["readme", "activity_log_fields", "preferences"] as const;
+export type Section = (typeof SECTIONS)[number];
+
 export interface BundleInput {
   scope?: string;
   guides?: string[];
   schemas?: string[];
+  /** Core sections to return; omitted = all. [] returns only the named guides and schemas. */
+  sections?: readonly Section[];
 }
 
 type Fields = { data_source_id: string; fields: Field[] };
@@ -54,11 +61,13 @@ type PreferenceRow = { Preference?: string; Strength?: string; Scope?: string[] 
 
 export interface Bundle {
   errors: { section: string; message: string }[];
-  readme: { id: string; markdown: string };
-  activity_log_fields: Fields | null;
-  preferences: { scope: string | null; rows: PreferenceRow[] } | null;
+  readme?: { id: string; markdown: string | null };
+  activity_log_fields?: Fields | null;
+  preferences?: { scope: string | null; rows: PreferenceRow[] } | null;
   schemas?: Record<string, Fields | null>;
   guides?: Record<string, { id: string; markdown: string } | null>;
+  /** What didn't fit in this reply, as the arguments of the call that returns it. */
+  pending?: BundleInput;
 }
 
 export const README_TRUNCATED = "Notion marked the README truncated; tables past the cut can't be read";
@@ -95,7 +104,9 @@ export async function buildBundle(
   const truncated = Boolean(md.truncated);
 
   const errors: Bundle["errors"] = [];
-  const bundle: Bundle = { errors, readme: { id: readmeId, markdown }, activity_log_fields: null, preferences: null };
+  const want = new Set<Section>(input.sections ?? SECTIONS);
+  // The README is always read (its tables resolve everything else) but returned only when asked for.
+  const bundle: Bundle = { errors, ...(want.has("readme") ? { readme: { id: readmeId, markdown } } : {}) };
   if (truncated) errors.push({ section: "readme", message: README_TRUNCATED });
   const skipped = unrendered(md);
   if (skipped.length) errors.push({ section: "readme", message: unrenderedNote("the README", skipped) });
@@ -168,8 +179,8 @@ export async function buildBundle(
   };
 
   const [al, prefs, schemas, guides] = await Promise.all([
-    section("activity_log_fields", () => fieldsOf(ACTIVITY_LOG)),
-    section("preferences", preferences),
+    want.has("activity_log_fields") ? section("activity_log_fields", () => fieldsOf(ACTIVITY_LOG)) : undefined,
+    want.has("preferences") ? section("preferences", preferences) : undefined,
     input.schemas?.length ? named("schemas", input.schemas, fieldsOf) : undefined,
     input.guides?.length
       ? named("guides", input.guides, async (n) => {
@@ -183,9 +194,91 @@ export async function buildBundle(
         })
       : undefined,
   ]);
-  bundle.activity_log_fields = al;
-  bundle.preferences = prefs;
+  if (al !== undefined) bundle.activity_log_fields = al;
+  if (prefs !== undefined) bundle.preferences = prefs;
   if (schemas) bundle.schemas = schemas;
   if (guides) bundle.guides = guides;
   return bundle;
+}
+
+/** Room kept for `errors` and `pending` when judging whether one item could ever fit in a reply. */
+const FIT_SLACK = 1_000;
+
+/**
+ * Make a bundle fit one reply by whole sections, so the JSON is always valid. Core sections go
+ * in first, then schemas, then guides, each in the order asked for; an item that doesn't fit is
+ * skipped (later, smaller ones still go in) and listed in `pending`, which is exactly the
+ * arguments of the follow-up call. An item too long for any reply would stay pending forever,
+ * so it becomes null plus an `errors` entry naming the notion_request call that reads it.
+ */
+export function fitBundle(bundle: Bundle, scope?: string, budget = MAX_TEXT): Bundle {
+  const size = (v: unknown) => JSON.stringify(v).length;
+  if (size(bundle) <= budget) return bundle;
+
+  const errors = [...bundle.errors];
+  const tooLong = (v: unknown) => size(v) + FIT_SLACK > budget;
+  const giveUp = (section: string, what: string, v: unknown, read: string) =>
+    errors.push({ section, message: `${what} is ${size(v)} chars, too long for one reply. Read it with notion_request ${read}` });
+  const pageRead = (id: string) => `GET /v1/pages/${id}/markdown and follow its offset marker.`;
+
+  type Item = { kind: "sections" | "schemas" | "guides"; name: string; value: unknown };
+  const items: Item[] = [];
+  if (bundle.readme) {
+    let readme = bundle.readme;
+    if (tooLong(readme)) {
+      giveUp("readme", "The README", readme, pageRead(readme.id));
+      readme = { id: readme.id, markdown: null };
+    }
+    items.push({ kind: "sections", name: "readme", value: readme });
+  }
+  for (const name of ["activity_log_fields", "preferences"] as const) {
+    if (!(name in bundle)) continue;
+    let value = bundle[name] ?? null;
+    if (value && tooLong(value)) {
+      const read = "data_source_id" in value ? `GET /v1/data_sources/${value.data_source_id}` : `on the ${PREFERENCES} store (POST /v1/data_sources/{id}/query).`;
+      giveUp(name, name, value, read);
+      value = null;
+    }
+    items.push({ kind: "sections", name, value });
+  }
+  for (const [name, v] of Object.entries(bundle.schemas ?? {})) {
+    const over = v && tooLong(v);
+    if (over) giveUp(`schemas.${name}`, `Schema "${name}"`, v, `GET /v1/data_sources/${v.data_source_id}`);
+    items.push({ kind: "schemas", name, value: over ? null : v });
+  }
+  for (const [name, v] of Object.entries(bundle.guides ?? {})) {
+    const over = v && tooLong(v);
+    if (over) giveUp(`guides.${name}`, `Guide "${name}"`, v, pageRead(v.id));
+    items.push({ kind: "guides", name, value: over ? null : v });
+  }
+
+  const build = (keep: Set<Item>): Bundle => {
+    const out: Record<string, unknown> = { errors };
+    const left: Item[] = [];
+    for (const it of items) {
+      if (!keep.has(it)) left.push(it);
+      else if (it.kind === "sections") out[it.name] = it.value;
+      else ((out[it.kind] ??= {}) as Record<string, unknown>)[it.name] = it.value;
+    }
+    if (left.length) {
+      const names = (kind: Item["kind"]) => left.filter((it) => it.kind === kind).map((it) => it.name);
+      const [schemas, guides] = [names("schemas"), names("guides")];
+      out.pending = {
+        sections: names("sections"),
+        ...(schemas.length ? { schemas } : {}),
+        ...(guides.length ? { guides } : {}),
+        ...(scope !== undefined && names("sections").includes("preferences") ? { scope } : {}),
+      };
+    }
+    return out as unknown as Bundle;
+  };
+
+  // A null (failed or given-up) item is a few chars and says something the caller needs: always kept.
+  const keep = new Set(items.filter((it) => it.value === null));
+  for (const it of items) {
+    if (keep.has(it)) continue;
+    keep.add(it);
+    if (size(build(keep)) > budget) keep.delete(it);
+  }
+  return build(keep);
 }

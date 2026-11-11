@@ -237,3 +237,110 @@ test("a guide with no markdown errors instead of returning empty", async () => {
   assert.equal(b.guides["Tool Guide"], null);
   assert.match(b.errors.find((x) => x.section === "guides.Tool Guide").message, /markdown/);
 });
+
+// ---------------------------------------------------------------------------
+// sections: a follow-up call that leaves the core out
+// ---------------------------------------------------------------------------
+test("sections: [] returns only the named guides and skips the core reads", async () => {
+  const { calls, request } = fakeNotion();
+  const b = await buildBundle("readme", { sections: [], guides: ["Tool Guide"] }, request);
+  assert.deepEqual(Object.keys(b), ["errors", "guides"]);
+  assert.deepEqual(b.guides["Tool Guide"], { id: GUIDE_ID, markdown: "# Tool Guide" });
+  // The README is still read (it resolves the guide), but neither store is.
+  assert.deepEqual(calls.map((r) => `${r.method} ${r.path}`).sort(), [`GET /v1/pages/${GUIDE_ID}/markdown`, "GET /v1/pages/readme/markdown"]);
+});
+
+test("sections picks core sections one by one", async () => {
+  const { calls, request } = fakeNotion();
+  const b = await buildBundle("readme", { sections: ["preferences"], scope: "Team A" }, request);
+  assert.deepEqual(Object.keys(b), ["errors", "preferences"]);
+  assert.equal(b.preferences.rows.length, 1);
+  assert.ok(!calls.some((r) => r.path === `/v1/data_sources/${AL_ID}`));
+});
+
+// ---------------------------------------------------------------------------
+// fitBundle: a bundle over the reply cap keeps whole sections and lists the rest in `pending`
+// ---------------------------------------------------------------------------
+import { fitBundle } from "../src/governance.ts";
+
+const x = (n) => "x".repeat(n);
+const guide = (n) => ({ id: `g${n}`, markdown: x(n) });
+const core = () => ({
+  errors: [],
+  readme: { id: "r", markdown: x(1000) },
+  activity_log_fields: { data_source_id: "al", fields: [] },
+  preferences: { scope: "Team A", rows: [] },
+});
+const BUDGET = 5000;
+const fits = (b) => JSON.stringify(b).length <= BUDGET;
+
+test("fitBundle leaves a bundle under the cap alone", () => {
+  const b = { ...core(), guides: { A: guide(3000) } };
+  assert.equal(fitBundle(b, "Team A", BUDGET), b);
+});
+
+test("fitBundle keeps the core and moves guides that don't fit to pending", () => {
+  const out = fitBundle({ ...core(), guides: { A: guide(3000), B: guide(3000) } }, "Team A", BUDGET);
+  assert.ok(fits(out));
+  assert.equal(Object.keys(out)[0], "errors");
+  assert.equal(out.readme.markdown.length, 1000);
+  assert.ok(out.activity_log_fields && out.preferences);
+  assert.deepEqual(Object.keys(out.guides), ["A"]);
+  assert.deepEqual(out.pending, { sections: [], guides: ["B"] });
+});
+
+test("fitBundle skips what doesn't fit and still takes later, smaller items", () => {
+  const big = { data_source_id: "s", fields: [{ name: x(3000), type: "title" }] };
+  const out = fitBundle(
+    { ...core(), schemas: { Big: big, Small: { data_source_id: "t", fields: [] } }, guides: { A: guide(3000), B: guide(3000), C: guide(50) } },
+    undefined,
+    BUDGET,
+  );
+  assert.ok(fits(out));
+  assert.deepEqual(Object.keys(out.schemas), ["Big", "Small"]);
+  assert.deepEqual(Object.keys(out.guides), ["C"]);
+  assert.deepEqual(out.pending, { sections: [], guides: ["A", "B"] });
+});
+
+test("fitBundle: a guide too long for any reply is nulled with the call that reads it", () => {
+  const out = fitBundle({ ...core(), guides: { A: guide(6000), B: guide(50) } }, undefined, BUDGET);
+  assert.ok(fits(out));
+  assert.equal(out.guides.A, null);
+  assert.equal(out.guides.B.markdown.length, 50);
+  const e = out.errors.find((r) => r.section === "guides.A");
+  assert.match(e.message, /GET \/v1\/pages\/g6000\/markdown/);
+  assert.ok(!("pending" in out));
+});
+
+test("fitBundle: a core that is itself over the cap sheds sections to pending, with the scope", () => {
+  const b = core();
+  b.activity_log_fields.fields = [{ name: x(2500), type: "title" }];
+  b.preferences.rows = [{ Preference: x(2500) }];
+  const out = fitBundle(b, "Team A", BUDGET);
+  assert.ok(fits(out));
+  assert.ok(out.readme && out.activity_log_fields);
+  assert.ok(!("preferences" in out));
+  assert.deepEqual(out.pending, { sections: ["preferences"], scope: "Team A" });
+});
+
+test("fitBundle: a README too long for any reply is nulled with the call that reads it", () => {
+  const b = core();
+  b.readme.markdown = x(6000);
+  const out = fitBundle(b, undefined, BUDGET);
+  assert.ok(fits(out));
+  assert.deepEqual(out.readme, { id: "r", markdown: null });
+  assert.match(out.errors.find((r) => r.section === "readme").message, /GET \/v1\/pages\/r\/markdown/);
+  assert.ok(out.activity_log_fields && out.preferences);
+});
+
+test("following pending returns the rest", async () => {
+  const long = "g".repeat(3200);
+  const { request } = fakeNotion({ [`GET /v1/pages/${GUIDE_ID}/markdown`]: { object: "page_markdown", markdown: long, truncated: false } });
+  const args = { scope: "Team A", guides: ["Tool Guide"] };
+  const budget = JSON.stringify(await buildBundle("readme", { scope: "Team A" }, request)).length + 3000;
+  const first = fitBundle(await buildBundle("readme", args, request), args.scope, budget);
+  assert.deepEqual(first.pending, { sections: [], guides: ["Tool Guide"] });
+  const rest = fitBundle(await buildBundle("readme", first.pending, request), first.pending.scope, budget);
+  assert.deepEqual(Object.keys(rest), ["errors", "guides"]);
+  assert.equal(rest.guides["Tool Guide"].markdown, long);
+});

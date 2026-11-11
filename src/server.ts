@@ -15,7 +15,8 @@ import { parseBody } from "./body";
 import { type Env, NOTION_NOTES, type Spec, gate, notionRequest, spec } from "./notion";
 import { fetchFitted, withPageSize } from "./paging";
 import { text } from "./text";
-import { buildBundle } from "./governance";
+import pkg from "../package.json" with { type: "json" };
+import { SECTIONS, buildBundle, fitBundle } from "./governance";
 import { isReplayable, shape } from "./shape";
 
 export type { Env };
@@ -66,7 +67,7 @@ function resolveRefs(node: unknown, depth = 0): unknown {
 const QueryScalar = z.union([z.string(), z.number(), z.boolean()]);
 
 function buildServer(env: Env): McpServer {
-  const server = new McpServer({ name: "notion-api", version: "1.3.0" });
+  const server = new McpServer({ name: "notion-api", version: pkg.version });
 
   server.registerTool(
     "notion_find_endpoints",
@@ -186,18 +187,19 @@ function buildServer(env: Env): McpServer {
       {
         description:
           "Session-start governance in one call: the workspace README, Activity Log field rules, and Adopted Preferences " +
-          "for a Scope (Evidence omitted), read live. Optional: named guides or store schemas.",
+          "for a Scope (Evidence omitted), read live. Optional: named guides or store schemas. " +
+          "If the result has `pending`, call again with exactly those arguments for the rest.",
         inputSchema: {
           scope: z.string().optional().describe("Preferences Scope option; omitted = Whole workspace rows only"),
           guides: z.array(z.string()).max(3).optional().describe("Guide names from the README's Guides table"),
           schemas: z.array(z.string()).max(3).optional().describe("Store names from the README's Where things go table"),
-          offset: z.number().int().min(0).optional().describe("Character offset from a truncation marker"),
+          sections: z.array(z.enum(SECTIONS)).optional().describe("Core sections to return; omitted = all, [] = only the named guides and schemas"),
         },
       },
-      async ({ scope, guides, schemas, offset }) => {
+      async ({ scope, guides, schemas, sections }) => {
         try {
-          // Read live on every call, offset included, so a later part never mixes in stale content.
-          return text(await buildBundle(readmeId, { scope, guides, schemas }, (r) => notionRequest(env, r)), false, offset);
+          // Fitted by whole sections, so the reply is always valid JSON and text() never cuts it.
+          return text(fitBundle(await buildBundle(readmeId, { scope, guides, schemas, sections }, (r) => notionRequest(env, r)), scope));
         } catch (e) {
           return text(String(e instanceof Error ? e.message : e), true);
         }

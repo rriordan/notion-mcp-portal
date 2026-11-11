@@ -47,19 +47,12 @@ check(
 );
 
 if (BUNDLE) {
-  // The whole bundle, reassembled from offset parts when it is over the reply cap.
+  // One reply is always whole JSON within the cap; what didn't fit is named in `pending`.
   const bundle = async (args) => {
-    let all = "";
-    let offset = 0;
-    for (let parts = 0; parts < 20; parts++) {
-      const { r, t } = await call("governance_bundle", { ...args, ...(offset ? { offset } : {}) });
-      if (r.isError) return { error: t };
-      const next = t.match(/\n…\[truncated: \d+ more chars\. Call again with the same arguments and offset=(\d+)\]$/);
-      all += t.replace(/^…\[chars \d+–\d+ of \d+\]\n/, "").replace(/\n…\[truncated: [^\]]*\]$/, "");
-      if (!next) break;
-      offset = Number(next[1]);
-    }
-    try { return { json: JSON.parse(all), chars: all.length }; } catch { return { error: `not JSON: ${all.slice(0, 120)}` }; }
+    const { r, t } = await call("governance_bundle", args);
+    if (r.isError) return { error: t };
+    if (t.length > 24_000) return { error: `${t.length} chars, over the reply cap` };
+    try { return { json: JSON.parse(t), chars: t.length }; } catch { return { error: `not JSON: ${t.slice(0, 120)}` }; }
   };
   const b = await bundle({});
   check("governance_bundle: no errors", !b.error && b.json.errors.length === 0, b.error ?? `${b.chars} chars ${JSON.stringify(b.json.errors).slice(0, 200)}`);

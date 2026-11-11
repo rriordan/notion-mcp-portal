@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+## 1.4.0
+
+A `governance_bundle` over the reply cap is now always valid JSON.
+
+### Fixed
+
+- **`governance_bundle` over 24,000 characters was cut mid-string**, so the reply wasn't JSON
+  (seen with 3 guides and 2 schemas, 32,980 characters). The bundle is now fitted by whole
+  sections: the core first, then schemas, then guides, each in the order asked for. What
+  didn't fit is named in a top-level `pending`, which is exactly the arguments of the call
+  that returns it. A single guide, schema or README too long for any reply is `null`, with the
+  `notion_request` call that reads it in `errors`.
+- **Bench "Saved" column** compared totals even when the reply cap left raw and compact with
+  different row counts. With different counts it now reports the saving per row and says so.
+
+### Added
+
+- **`sections`** on `governance_bundle`: which of `readme`, `activity_log_fields` and
+  `preferences` to return (omitted = all; `[]` = only the named guides and schemas). A
+  `pending` follow-up uses it, so the core isn't sent or queried twice. The README is still
+  read on every call, because its tables resolve everything else.
+
+### Removed
+
+- **`offset`** on `governance_bundle`. It re-read everything live and cut by characters, so
+  parts could come from different versions of a page. `pending` replaces it. `offset` on
+  `notion_request` is unchanged.
+
+### Changed
+
+- The server's reported version now comes from `package.json`.
+
 ## 1.3.0
 
 Governance release. Adds an optional tool that gives an agent everything it reads from a
