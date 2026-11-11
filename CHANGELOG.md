@@ -6,6 +6,8 @@
 
 A `governance_bundle` over the reply cap is now always valid JSON.
 
+Deployed 2026-11-11 as version `fb3e7eea-e693-48a1-a78e-7b7bab377f9e`; previous version (1.3.0) `662e0080-248e-4041-b3e4-bb1aea73a1c7`.
+
 ### Fixed
 
 - **`governance_bundle` over 24,000 characters was cut mid-string**, so the reply wasn't JSON
