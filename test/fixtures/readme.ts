@@ -2,6 +2,8 @@
 export const AL_ID = "11111111-1111-1111-1111-111111111111";
 export const PREFS_ID = "22222222-2222-2222-2222-222222222222";
 export const GUIDE_ID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+export const LONG_A_ID = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+export const LONG_B_ID = "cccccccccccccccccccccccccccccccc";
 
 export const README_MD = `# README
 
@@ -51,6 +53,14 @@ export const README_MD = `# README
 <tr>
 <td>[Tool Guide](https://app.notion.com/p/${GUIDE_ID})</td>
 <td>call a Notion tool</td>
+</tr>
+<tr>
+<td>[Long Guide A](https://app.notion.com/p/${LONG_A_ID})</td>
+<td>test a bundle over the reply cap</td>
+</tr>
+<tr>
+<td>[Long Guide B](https://app.notion.com/p/${LONG_B_ID})</td>
+<td>test a bundle over the reply cap</td>
 </tr>
 </table>
 

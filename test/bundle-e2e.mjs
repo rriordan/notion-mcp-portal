@@ -36,9 +36,22 @@ if (process.env.BUNDLE_EXPECT === "absent") {
     check("field rules carry descriptions", Boolean(b?.activity_log_fields?.fields?.some((f) => f.description)));
     check("preferences rows without Evidence", Array.isArray(b?.preferences?.rows) && b.preferences.rows.length > 0 && !("Evidence" in b.preferences.rows[0]));
 
-    // A bundle over the reply cap is read in parts, like notion_request: offset returns the rest.
-    const part = await call({ offset: 10 });
-    check("offset returns the rest of the bundle", !part.isError && part.raw.startsWith("…[chars 10–") && part.raw.endsWith(clean.raw.slice(10)), part.raw.slice(0, 60));
+    // A bundle over the reply cap stays valid JSON: whole sections, the rest named in `pending`.
+    const parse = (r) => {
+      try {
+        return JSON.parse(r.raw);
+      } catch {
+        return null;
+      }
+    };
+    const over = await call({ guides: ["Long Guide A", "Long Guide B", "Tool Guide"] });
+    const ob = parse(over);
+    check("over the cap: still valid JSON within the cap", !over.isError && ob !== null && over.raw.length <= 24_000, `${over.raw.length} chars`);
+    check("over the cap: core and the guides that fit are whole", Boolean(ob?.readme?.markdown) && ob?.guides?.["Long Guide A"]?.markdown?.length === 14_000 && ob?.guides?.["Tool Guide"]?.markdown === "# Tool Guide");
+    check("over the cap: the rest is in pending, as arguments", JSON.stringify(ob?.pending) === JSON.stringify({ sections: [], guides: ["Long Guide B"] }), JSON.stringify(ob?.pending));
+    const rest = ob?.pending ? await call(ob.pending) : { isError: true, raw: "" };
+    const rb = parse(rest);
+    check("following pending returns only the rest", !rest.isError && rb?.guides?.["Long Guide B"]?.markdown?.length === 14_000 && !("readme" in (rb ?? { readme: 1 })) && !("pending" in (rb ?? { pending: 1 })), rest.raw.slice(0, 120));
 
     const bad = await call({ scope: "Nope" });
     let nb = null;

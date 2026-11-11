@@ -6,6 +6,7 @@
 //
 // Setup is in bench/README.md.
 import { readFile, writeFile } from "node:fs/promises";
+import { rowCount, savedCell } from "./saved.mjs";
 import Anthropic from "@anthropic-ai/sdk";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -112,7 +113,7 @@ const report = {
   calls: [],
 };
 // The server cuts results at 24,000 chars; a cut result is marked so its size isn't mistaken for the whole.
-const measure = async (t) => ({ chars: t.length, tokens: await textTokens(t), truncated: t.includes("…[truncated ") });
+const measure = async (t) => ({ chars: t.length, tokens: await textTokens(t), truncated: t.includes("…[truncated "), rows: rowCount(t) });
 for (const r of results) {
   report.calls.push({ name: r.name, raw: r.raw === null ? null : await measure(r.raw), compact: await measure(r.compact) });
 }
@@ -131,9 +132,8 @@ for (const c of report.calls) {
     console.log(`| ${c.name} | n/a | ${n(c.compact)} | n/a |`);
     continue;
   }
-  const a = COUNT ? c.raw.tokens : c.raw.chars;
-  const b = COUNT ? c.compact.tokens : c.compact.chars;
-  const saved = c.raw.truncated ? "n/a (raw truncated)" : `${Math.round((1 - b / a) * 100)}%`;
+  const side = (x) => ({ size: COUNT ? x.tokens : x.chars, rows: x.rows, truncated: x.truncated });
+  const saved = savedCell(side(c.raw), side(c.compact));
   console.log(`| ${c.name} | ${n(c.raw)} | ${n(c.compact)} | ${saved} |`);
 }
 if (COUNT) {

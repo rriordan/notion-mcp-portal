@@ -1,7 +1,7 @@
 // LOCAL TESTING ONLY. A stand-in for api.notion.com: one data source with 250 wide rows, paged by
 // page_size and start_cursor like the real one. Used by dev-entry-mock.ts; never deployed.
 import { AL_DS, PREFS_DS } from "./fixtures/datasources.ts";
-import { AL_ID, GUIDE_ID, PREFS_ID, README_MD } from "./fixtures/readme.ts";
+import { AL_ID, GUIDE_ID, LONG_A_ID, LONG_B_ID, PREFS_ID, README_MD } from "./fixtures/readme.ts";
 
 const TOTAL = 250;
 const WIDE = 900; // chars of text per row, so 100 rows are far over the reply cap
@@ -34,6 +34,9 @@ const GOVERNANCE: Record<string, unknown> = {
   [`GET /v1/data_sources/${PREFS_ID}`]: PREFS_DS,
   [`POST /v1/data_sources/${PREFS_ID}/query`]: { object: "list", results: [prefRow], next_cursor: null, has_more: false },
   [`GET /v1/pages/${GUIDE_ID}/markdown`]: { object: "page_markdown", markdown: "# Tool Guide", truncated: false },
+  // Two guides of 14,000 chars: with the core, one fits in a 24,000-char reply and the other doesn't.
+  [`GET /v1/pages/${LONG_A_ID}/markdown`]: { object: "page_markdown", markdown: "a".repeat(14_000), truncated: false },
+  [`GET /v1/pages/${LONG_B_ID}/markdown`]: { object: "page_markdown", markdown: "b".repeat(14_000), truncated: false },
 };
 
 export const stats = { notionCalls: 0 };
