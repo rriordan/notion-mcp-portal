@@ -18,6 +18,7 @@ import { text } from "./text";
 import pkg from "../package.json" with { type: "json" };
 import { SECTIONS, buildBundle, fitBundle } from "./governance";
 import { isReplayable, shape } from "./shape";
+import { timed } from "./timing";
 
 export type { Env };
 
@@ -81,7 +82,7 @@ function buildServer(env: Env): McpServer {
         operation_id: z.string().optional().describe("Return the full schema for this operationId"),
       },
     },
-    async ({ query, operation_id }) => {
+    timed("notion_find_endpoints", async ({ query, operation_id }: { query?: string; operation_id?: string }) => {
       if (operation_id) {
         const op = OPS.find((o) => o.operationId === operation_id);
         if (!op) return text(`No endpoint with operationId "${operation_id}"`, true);
@@ -105,7 +106,7 @@ function buildServer(env: Env): McpServer {
       return text(
         scored.map(({ o }) => ({ method: o.method, path: o.path, operationId: o.operationId, summary: o.summary })),
       );
-    },
+    }),
   );
 
   server.registerTool(
@@ -143,7 +144,7 @@ function buildServer(env: Env): McpServer {
           .describe("Character offset into a long non-list result of a read (such as page Markdown); use the offset a truncation marker gives. Long lists are shortened by rows instead; follow their hint"),
       },
     },
-    async ({ method, path, query, body, format, offset }) => {
+    timed("notion_request", async ({ method, path, query, body, format, offset }) => {
       try {
         const replayable = isReplayable(method, path);
         // An offset re-sends the request; never do that for a write (it would run twice).
@@ -177,7 +178,7 @@ function buildServer(env: Env): McpServer {
       } catch (e) {
         return text(String(e instanceof Error ? e.message : e), true);
       }
-    },
+    }),
   );
 
   const readmeId = env.GOVERNANCE_README_ID?.trim();
@@ -196,14 +197,14 @@ function buildServer(env: Env): McpServer {
           sections: z.array(z.enum(SECTIONS)).optional().describe("Core sections to return; omitted = all, [] = only the named guides and schemas"),
         },
       },
-      async ({ scope, guides, schemas, sections }) => {
+      timed("governance_bundle", async ({ scope, guides, schemas, sections }) => {
         try {
           // Fitted by whole sections, so the reply is always valid JSON and text() never cuts it.
           return text(fitBundle(await buildBundle(readmeId, { scope, guides, schemas, sections }, (r) => notionRequest(env, r)), scope));
         } catch (e) {
           return text(String(e instanceof Error ? e.message : e), true);
         }
-      },
+      }),
     );
   }
 

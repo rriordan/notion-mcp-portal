@@ -24,6 +24,9 @@ A `governance_bundle` over the reply cap is now always valid JSON.
   `pending` follow-up uses it, so the core isn't sent or queried twice. The README is still
   read on every call, because its tables resolve everything else.
 
+- **One log line per tool call**: `{"event":"tool_call","tool":…,"ms":…,"error":…}`, so timing a
+  call is one filter in `wrangler tail` or Workers Logs. It holds no request or reply content.
+
 ### Removed
 
 - **`offset`** on `governance_bundle`. It re-read everything live and cut by characters, so
