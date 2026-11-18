@@ -65,6 +65,21 @@ test("if the database lookup fails, the error still says how to find the rows", 
   assert.equal(n, 2);
 });
 
+test("a database with no data sources still gets the generic hint", async () => {
+  let n = 0;
+  await withFetch(
+    async () => (++n === 1 ? isDatabase() : new Response(JSON.stringify({ object: "database", id: DB, data_sources: [] }), { status: 200 })),
+    async () => {
+      await assert.rejects(notionRequest({ NOTION_TOKEN: "t" }, { method: "GET", path: `/v1/pages/${DB}` }), (e) => {
+        assert.match(e.message, new RegExp(`GET /v1/databases/${DB}`));
+        assert.doesNotMatch(e.message, /Its rows:/);
+        return true;
+      });
+    },
+  );
+  assert.equal(n, 2);
+});
+
 test("other 400s get no extra lookup", async () => {
   let n = 0;
   await withFetch(
