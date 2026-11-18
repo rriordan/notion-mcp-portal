@@ -1,6 +1,18 @@
 # Changelog
 
-## Unreleased
+## 1.4.1
+
+Two common caller mistakes are now repaired or explained by the server.
+
+### Fixed
+
+- **`filter_properties` in a request body** was rejected by Notion ("body.filter_properties
+  should be not present"). Notion takes it only in the query string, so `notion_request` now
+  moves it there, joined with any `filter_properties` already in `query`.
+- **A database id sent to a page endpoint** (most often `GET /v1/pages/{id}/markdown`) failed
+  with "is a database, not a page" and no way forward. The error now names the database's
+  data sources and the `POST /v1/data_sources/{id}/query` call for each, from one cached
+  `GET /v1/databases/{id}`. If that lookup fails, it says how to find them.
 
 ## 1.4.0
 

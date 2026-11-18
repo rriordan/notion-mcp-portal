@@ -186,13 +186,40 @@ export async function notionRequest(env: Env, opts: NotionRequest): Promise<unkn
   });
   if (!res.ok) {
     // Surface Notion's error (code + message) so the model can self-correct.
+    const hint = res.status === 400 ? await databaseHint(env, err?.message) : "";
     throw new Error(
       `Notion API ${res.status} ${err?.code ?? ""}: ${err?.message ?? text}`.trim() +
-        errorTag(res.status, err?.code, res.headers.get("Retry-After"), idempotent),
+        errorTag(res.status, err?.code, res.headers.get("Retry-After"), idempotent) +
+        hint,
     );
   }
   if (cacheKey) schemaCache.set(cacheKey, { data, expires: Date.now() + SCHEMA_TTL_MS });
   return data;
+}
+
+const DATABASE_NOT_PAGE = /Provided ID ([0-9a-f-]{32,36}) is a database, not a page/i;
+
+/**
+ * A database id sent to a page endpoint (GET /v1/pages/{id}/markdown is the usual one) fails
+ * with "is a database, not a page". The rows live in the database's data source, whose id the
+ * caller rarely has, so look it up once (a cached schema read) and name the call to make.
+ */
+async function databaseHint(env: Env, message: string | undefined): Promise<string> {
+  const id = message?.match(DATABASE_NOT_PAGE)?.[1];
+  if (!id) return "";
+  try {
+    const db = (await notionRequest(env, { method: "GET", path: `/v1/databases/${id}` })) as {
+      data_sources?: { id: string; name?: string }[];
+    };
+    const sources = db.data_sources ?? [];
+    if (sources.length) {
+      const list = sources.map((s) => `POST /v1/data_sources/${s.id}/query${s.name ? ` ("${s.name}")` : ""}`).join("; ");
+      return ` Its rows: ${list}. Its schema: GET /v1/data_sources/{id}.`;
+    }
+  } catch {
+    /* fall through to the generic hint */
+  }
+  return ` Read it with GET /v1/databases/${id}; query rows with POST /v1/data_sources/{id}/query using an id from its data_sources[].`;
 }
 
 export const NOTION_NOTES = `
