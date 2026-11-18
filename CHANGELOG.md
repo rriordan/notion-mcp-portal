@@ -4,6 +4,8 @@
 
 Two common caller mistakes are now repaired or explained by the server.
 
+Deployed 2026-11-18 as version `0861eb91-0153-4ba8-8a2f-445997e79a37`; previous version (1.4.0) `fb3e7eea-e693-48a1-a78e-7b7bab377f9e`.
+
 ### Fixed
 
 - **`filter_properties` in a request body** was rejected by Notion ("body.filter_properties
