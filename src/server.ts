@@ -11,7 +11,7 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import { createMcpHandler } from "agents/mcp";
 import { z } from "zod";
-import { parseBody } from "./body";
+import { hoistFilterProperties, parseBody } from "./body";
 import { type Env, NOTION_NOTES, type Spec, gate, notionRequest, spec } from "./notion";
 import { fetchFitted, withPageSize } from "./paging";
 import { text } from "./text";
@@ -151,7 +151,7 @@ function buildServer(env: Env): McpServer {
         if (offset && !replayable) {
           return text(`offset is only for reads; ${method} ${path} would change Notion again. Read the result back with a GET.`, true);
         }
-        const req = { method, path, query, body: parseBody(body) };
+        const req = hoistFilterProperties({ method, path, query, body: parseBody(body) });
         if (replayable && !offset) {
           // A long list is re-fetched with a page_size that fits, so its cursor skips nothing.
           // Remember what fit for this endpoint, so the next page is fetched right the first time.
