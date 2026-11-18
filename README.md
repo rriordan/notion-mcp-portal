@@ -153,6 +153,11 @@ After `wrangler deploy`:
 
 Rollback: redeploy the previous release commit. The deploy ids are in the release notes.
 
+Two things that cost a step in practice:
+
+- GitHub deletes a PR's branch when it merges, so run `git fetch --prune` before listing "stale" remote branches.
+- When logging `wrangler tail --format json` through `jq` into a file, use `jq --unbuffered`; otherwise the file stays empty until the buffer fills.
+
 ## License
 
 MIT. `src/notion-openapi.json` comes from [makenotion/notion-mcp-server](https://github.com/makenotion/notion-mcp-server) (MIT); see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
