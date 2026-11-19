@@ -150,6 +150,7 @@ After `wrangler deploy`:
 4. An unauthenticated request to `/mcp` returns 401.
 5. `wrangler tail` shows no exceeded-CPU outcomes or exceptions.
 6. One authenticated scan through the portal succeeds. The scheduled agents' next runs are the longer check.
+7. Record the release wherever you track the project (a status page, handoff note or issue): the version, the deployed version id, the previous id for rollback, and anything left open. A deploy with no record is easy to lose, and the tracker then names the old version.
 
 Rollback: redeploy the previous release commit. The deploy ids are in the release notes.
 
