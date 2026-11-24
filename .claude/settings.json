@@ -10,6 +10,7 @@
       "Bash(node --test *)",
       "Bash(npx tsc *)",
       "Bash(cp wrangler.example.jsonc wrangler.jsonc)",
+      "Bash(gitleaks git *)",
       "Bash(git status *)",
       "Bash(git diff *)",
       "Bash(git log *)",

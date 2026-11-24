@@ -9,6 +9,7 @@ Run these in order. A PR opens only when all of them pass.
 3. `npm run check`: typecheck plus a deploy dry-run.
 4. `npm test`. The `test` script lists files explicitly, so register any new `test/*.test.mjs` there.
 5. `npm run test:e2e`: the real Worker against a mock Notion. When other worktrees may be running, set `E2E_PORT` to the port your brief gives you (default 8788).
+6. After committing and before pushing: `gitleaks git . --redact --no-banner` must report "no leaks found". CI runs the same scan (`.github/workflows/check.yml`); a leak in a pushed commit is public at once, because this repo is public. If it finds one, stop and report it. Leave history rewriting to Robert.
 
 ## Conventions
 - One concern per PR. Title it like the git log: `area: change (version)`.
