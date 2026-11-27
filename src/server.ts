@@ -11,6 +11,7 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import { createMcpHandler } from "agents/mcp";
 import { z } from "zod";
+import { BETA_FLAGS } from "./beta";
 import { hoistFilterProperties, parseBody } from "./body";
 import { type Env, NOTION_NOTES, type Spec, gate, notionRequest, spec } from "./notion";
 import { fetchFitted, withPageSize } from "./paging";
@@ -142,20 +143,29 @@ function buildServer(env: Env): McpServer {
           .min(0)
           .optional()
           .describe("Character offset into a long non-list result of a read (such as page Markdown); use the offset a truncation marker gives. Long lists are shortened by rows instead; follow their hint"),
+        betas: z
+          .array(z.enum(BETA_FLAGS))
+          .max(BETA_FLAGS.length)
+          .optional()
+          .describe(
+            "Opt-in Notion API betas, sent as the Notion-Beta header. Omit unless needed. " +
+              "status-group-filters-2026-10-06: filter a status property by group with group_equals / group_does_not_equal " +
+              "(with it, equals / does_not_equal match option names only)",
+          ),
       },
     },
-    timed("notion_request", async ({ method, path, query, body, format, offset }) => {
+    timed("notion_request", async ({ method, path, query, body, format, offset, betas }) => {
       try {
         const replayable = isReplayable(method, path);
         // An offset re-sends the request; never do that for a write (it would run twice).
         if (offset && !replayable) {
           return text(`offset is only for reads; ${method} ${path} would change Notion again. Read the result back with a GET.`, true);
         }
-        const req = hoistFilterProperties({ method, path, query, body: parseBody(body) });
+        const req = hoistFilterProperties({ method, path, query, body: parseBody(body), ...(betas?.length ? { betas } : {}) });
         if (replayable && !offset) {
           // A long list is re-fetched with a page_size that fits, so its cursor skips nothing.
           // Remember what fit for this endpoint, so the next page is fetched right the first time.
-          const key = `${method} ${path.split("?")[0]} ${format ?? ""}`;
+          const key = `${method} ${path.split("?")[0]} ${format ?? ""}${betas?.length ? ` ${betas.join(",")}` : ""}`;
           const asked = Number((req.body as { page_size?: unknown } | undefined)?.page_size ?? req.query?.page_size ?? 100);
           const hint = fitHints.get(key);
           const startSize = hint && hint < asked ? hint : undefined;

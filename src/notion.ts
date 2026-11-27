@@ -6,6 +6,7 @@
  */
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import spec from "./notion-openapi.json" with { type: "json" };
+import { betaHeader, betaHint } from "./beta.ts";
 import { errorTag, fetchWithRetry } from "./retry.ts";
 import { isReplayable } from "./shape.ts";
 
@@ -34,6 +35,8 @@ export interface NotionRequest {
   rawBody?: boolean;
   /** Skip the schema-cache read (the fresh result is still stored). For reads that must be live. */
   noCache?: boolean;
+  /** Opt-in Notion API betas, sent as the Notion-Beta header. Allowlisted in beta.ts. */
+  betas?: string[];
 }
 
 const NOTION_ORIGIN = "https://api.notion.com";
@@ -130,6 +133,8 @@ export async function notionRequest(env: Env, opts: NotionRequest): Promise<unkn
   }
   const url = new URL(opts.path, NOTION_ORIGIN);
   if (url.origin !== NOTION_ORIGIN) throw new Error("Requests may only go to api.notion.com");
+  // Validated before anything is sent: a malformed or unlisted flag never reaches Notion.
+  const beta = betaHeader(opts.betas);
   for (const [k, v] of Object.entries(opts.query ?? {})) {
     if (v === undefined) continue;
     // Arrays repeat the key, which is how Notion takes several filter_properties.
@@ -137,7 +142,8 @@ export async function notionRequest(env: Env, opts: NotionRequest): Promise<unkn
     else url.searchParams.set(k, String(v));
   }
 
-  const cacheKey = schemaCacheKey(opts.method, url);
+  // A beta can change a response's shape, so beta reads neither use nor fill the schema cache.
+  const cacheKey = beta ? null : schemaCacheKey(opts.method, url);
   if (opts.method !== "GET") schemaCache.delete(url.pathname);
   else if (cacheKey && !opts.noCache) {
     const hit = schemaCache.get(cacheKey);
@@ -151,6 +157,7 @@ export async function notionRequest(env: Env, opts: NotionRequest): Promise<unkn
     Authorization: `Bearer ${env.NOTION_TOKEN}`,
     "Notion-Version": notionVersionFor(opts.method, url.pathname),
   };
+  if (beta) headers["Notion-Beta"] = beta;
   let body: BodyInit | undefined;
   if (opts.body !== undefined && opts.method !== "GET") {
     headers["Content-Type"] = opts.contentType ?? "application/json";
@@ -158,13 +165,14 @@ export async function notionRequest(env: Env, opts: NotionRequest): Promise<unkn
   }
 
   const idempotent = isReplayable(opts.method, url.pathname);
+  const betas = beta ? { betas: beta.split(",") } : {};
   const started = Date.now();
   let res: Response;
   let retries: number;
   try {
     ({ res, retries } = await fetchWithRetry(() => fetch(url, { method: opts.method, headers, body }), { idempotent }));
   } catch (e) {
-    logCall({ method: opts.method, path: url.pathname, cached: false, ms: Date.now() - started, status: 0, error: "network" });
+    logCall({ method: opts.method, path: url.pathname, ...betas, cached: false, ms: Date.now() - started, status: 0, error: "network" });
     throw e;
   }
   const text = await res.text();
@@ -178,6 +186,7 @@ export async function notionRequest(env: Env, opts: NotionRequest): Promise<unkn
   logCall({
     method: opts.method,
     path: url.pathname,
+    ...betas,
     cached: false,
     ms: Date.now() - started,
     status: res.status,
@@ -190,7 +199,8 @@ export async function notionRequest(env: Env, opts: NotionRequest): Promise<unkn
     throw new Error(
       `Notion API ${res.status} ${err?.code ?? ""}: ${err?.message ?? text}`.trim() +
         errorTag(res.status, err?.code, res.headers.get("Retry-After"), idempotent) +
-        hint,
+        hint +
+        (res.status === 400 ? betaHint(err?.message, opts.betas) : ""),
     );
   }
   if (cacheKey) schemaCache.set(cacheKey, { data, expires: Date.now() + SCHEMA_TTL_MS });

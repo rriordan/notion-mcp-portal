@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.5.0
+
+`notion_request` can opt one request into a Notion API beta.
+
+### Added
+
+- **`betas`** on `notion_request`: allowlisted Notion API beta flags, sent as the `Notion-Beta`
+  header. The allowlist is `status-group-filters-2026-10-06`, which enables status group
+  filters (`group_equals` / `group_does_not_equal`); with it, `equals` / `does_not_equal` match
+  option names only. Malformed, unlisted or repeated flags are rejected before anything is sent
+  to Notion. Requests without `betas` are unchanged and send no beta header.
+- **A missing beta named by Notion** ("require the Notion-Beta: … header") now comes back with
+  the `betas` argument to pass, when that flag is allowlisted.
+
+### Changed
+
+- A schema read sent with `betas` neither uses nor fills the 5-minute schema cache, since a
+  beta can change the response. Each logged call that sent betas lists them.
+
 ## 1.4.1
 
 Two common caller mistakes are now repaired or explained by the server.
