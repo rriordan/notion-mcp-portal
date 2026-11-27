@@ -81,9 +81,54 @@ const OTHER: Record<string, (size: number, cursor: string | null) => Response> =
     listPage(120, n, c, (i) => ({ object: "user", id: id(i), type: "person", name: `User ${i} ${"w".repeat(WIDE)}` }), { type: "user", user: {} }),
 };
 
+// A data source with a status property, answering status group filters like Notion does with and
+// without the status group filters beta. Every other route refuses a Notion-Beta header, so the
+// other e2e scans also check that plain requests never send one.
+const STATUS_BETA = "status-group-filters-2026-10-06";
+const STATUS_ROWS = [
+  { name: "Write spec", option: "In progress", group: "In progress" },
+  { name: "Review PR", option: "In review", group: "In progress" },
+  { name: "Ship", option: "Not started", group: "To-do" },
+];
+const statusPage = (r: (typeof STATUS_ROWS)[number], i: number) => ({
+  object: "page",
+  id: id(900 + i),
+  properties: {
+    Name: { id: "title", type: "title", title: [{ type: "text", text: { content: r.name }, plain_text: r.name }] },
+    Status: { id: "s", type: "status", status: { name: r.option } },
+  },
+});
+
+function statusQuery(body: { filter?: { status?: Record<string, unknown> } }, beta: string | null): Response {
+  const status = body.filter?.status ?? {};
+  const betaOn = (beta ?? "").split(",").includes(STATUS_BETA);
+  if ("group_equals" in status && !betaOn) {
+    return json(
+      {
+        object: "error",
+        status: 400,
+        code: "validation_error",
+        message: `Status group operators require the "Notion-Beta: ${STATUS_BETA}" header. See https://developers.notion.com/reference/filter-data-source-entries#status-group-filters-beta.`,
+      },
+      400,
+    );
+  }
+  const group = status.group_equals as string | undefined;
+  const results = STATUS_ROWS.map(statusPage).filter((_, i) => !group || STATUS_ROWS[i].group === group);
+  return json({ object: "list", results, next_cursor: null, has_more: false, type: "page_or_data_source", page_or_data_source: {} });
+}
+
 export async function mockFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url);
   const method = init?.method ?? "GET";
+  const beta = new Headers(init?.headers).get("Notion-Beta");
+  if (method === "POST" && url.pathname === "/v1/data_sources/mock-status/query") {
+    stats.notionCalls++;
+    return statusQuery(JSON.parse(String(init?.body ?? "{}")), beta);
+  }
+  if (beta !== null) {
+    return json({ object: "error", status: 400, code: "validation_error", message: `mock: unexpected Notion-Beta header "${beta}"` }, 400);
+  }
   const body = method === "POST" ? (JSON.parse(String(init?.body ?? "{}")) as { page_size?: number; start_cursor?: string }) : {};
   const size = Number(body.page_size ?? url.searchParams.get("page_size") ?? 100);
   const cursor = body.start_cursor ?? url.searchParams.get("start_cursor");
