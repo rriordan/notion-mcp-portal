@@ -94,7 +94,62 @@ test("clean bundle", async () => {
   assert.ok(!("Evidence" in b.preferences.rows[0]));
   assert.ok(!("schemas" in b) && !("guides" in b));
   assert.ok(calls.length >= 4);
+  // Rules (Markdown) and the Preferences query are live; store schemas may come from the cache.
+  const schemaReads = calls.filter((r) => r.method === "GET" && r.path.startsWith("/v1/data_sources/"));
+  assert.equal(schemaReads.length, 2);
+  assert.ok(schemaReads.every((r) => !r.noCache));
+  assert.ok(calls.filter((r) => !schemaReads.includes(r)).every((r) => r.noCache === true));
+});
+
+const schemaGets = (calls, id) => calls.filter((r) => r.method === "GET" && r.path === `/v1/data_sources/${id}`);
+
+test("schemas naming the core stores reads each schema once", async () => {
+  const { calls, request } = fakeNotion();
+  const b = await buildBundle("readme", { schemas: ["Preferences", "Activity Log"] }, request);
+  assert.deepEqual(b.errors, []);
+  assert.equal(b.schemas.Preferences.data_source_id, PREFS_ID);
+  assert.deepEqual(b.schemas["Activity Log"], b.activity_log_fields);
+  assert.equal(schemaGets(calls, PREFS_ID).length, 1);
+  assert.equal(schemaGets(calls, AL_ID).length, 1);
+});
+
+test("fresh: true reads schemas with noCache", async () => {
+  const { calls, request } = fakeNotion();
+  const b = await buildBundle("readme", { fresh: true, schemas: ["Preferences"] }, request);
+  assert.deepEqual(b.errors, []);
+  assert.ok(calls.length >= 4);
   assert.ok(calls.every((r) => r.noCache === true));
+});
+
+test("a cached schema that rejects the scope is re-read once fresh", async () => {
+  // The cached copy predates the "Team A" option.
+  const stale = { ...PREFS_DS, properties: { ...PREFS_DS.properties, Scope: { type: "multi_select", multi_select: { options: [{ name: "Whole workspace" }] } } } };
+  let n = 0;
+  const { calls, request } = fakeNotion({ [`GET /v1/data_sources/${PREFS_ID}`]: () => (n++ === 0 ? stale : PREFS_DS) });
+  const b = await buildBundle("readme", { scope: "Team A" }, request);
+  assert.deepEqual(b.errors, []);
+  assert.equal(b.preferences.scope, "Team A");
+  const reads = schemaGets(calls, PREFS_ID);
+  assert.equal(reads.length, 2);
+  assert.deepEqual(
+    reads.map((r) => r.noCache === true),
+    [false, true],
+  );
+});
+
+test("a schema that is still wrong after the fresh read errors as before", async () => {
+  const { calls, request } = fakeNotion();
+  const b = await buildBundle("readme", { scope: "Nope" }, request);
+  assert.equal(b.preferences, null);
+  assert.match(b.errors.find((x) => x.section === "preferences").message, /Unknown scope "Nope"/);
+  assert.equal(schemaGets(calls, PREFS_ID).length, 2);
+});
+
+test("with fresh: true a rejected scope is not re-read", async () => {
+  const { calls, request } = fakeNotion();
+  const b = await buildBundle("readme", { scope: "Nope", fresh: true }, request);
+  assert.equal(b.preferences, null);
+  assert.equal(schemaGets(calls, PREFS_ID).length, 1);
 });
 
 test("no scope means Whole workspace only", async () => {

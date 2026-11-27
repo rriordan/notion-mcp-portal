@@ -1,6 +1,7 @@
 /**
  * governance_bundle: everything an agent reads from Notion governance at session start, in one
- * live call. Stores and guides are resolved through the README's own tables (readme-tables.ts),
+ * call. The README, guides and Preferences rows are read live; store schemas may come from the
+ * 5-minute schema cache (notion.ts) unless `fresh` is set. Stores and guides are resolved through the README's own tables (readme-tables.ts),
  * so no workspace IDs live in code. Names below are generic store and property roles; rename
  * them here if your workspace uses different ones.
  */
@@ -54,6 +55,8 @@ export interface BundleInput {
   schemas?: string[];
   /** Core sections to return; omitted = all. [] returns only the named guides and schemas. */
   sections?: readonly Section[];
+  /** Read store schemas live instead of from the 5-minute schema cache. */
+  fresh?: boolean;
 }
 
 type Fields = { data_source_id: string; fields: Field[] };
@@ -91,11 +94,23 @@ export async function buildBundle(
   input: BundleInput,
   request: (r: NotionRequest) => Promise<unknown>,
 ): Promise<Bundle> {
-  const get = (path: string) => request({ method: "GET", path, noCache: true });
+  // Rules (README, guides) are always read live. Store schemas may come from the schema cache
+  // unless `fresh`; duplicate schema reads within this call share one request (single-flight,
+  // scoped to the call so no promise outlives the request that started it).
+  const live = (path: string) => request({ method: "GET", path, noCache: true });
+  const inflight = new Map<string, Promise<unknown>>();
+  const schema = (path: string) => {
+    let p = inflight.get(path);
+    if (!p) {
+      p = request({ method: "GET", path, noCache: input.fresh === true });
+      inflight.set(path, p);
+    }
+    return p;
+  };
 
   let md: Markdown;
   try {
-    md = (await get(`/v1/pages/${readmeId}/markdown`)) as Markdown;
+    md = (await live(`/v1/pages/${readmeId}/markdown`)) as Markdown;
   } catch (e) {
     throw new Error(`Couldn't read the governance README ${readmeId}: ${message(e)}`);
   }
@@ -124,7 +139,7 @@ export async function buildBundle(
     if (r.ok) return r.value;
     throw new Error(truncated ? `${r.error} (the README was truncated, so the table may be past the cut)` : r.error);
   };
-  const fieldsOf = async (store: string) => compactFields(await get(`/v1/data_sources/${must(resolveStore(markdown, store))}`));
+  const fieldsOf = async (store: string) => compactFields(await schema(`/v1/data_sources/${must(resolveStore(markdown, store))}`));
 
   async function preferences(): Promise<NonNullable<Bundle["preferences"]>> {
     const id = must(resolveStore(markdown, PREFERENCES));
@@ -147,26 +162,14 @@ export async function buildBundle(
       return rows;
     };
     // The schema read (for scope validation) and the query run in parallel.
-    const [ds, rows] = await Promise.all([get(`/v1/data_sources/${id}`), queryAll()]);
-    const options = scopeOptions(ds);
-    if (!options) throw new Error(`${PREFERENCES} has no multi_select '${SCOPE}' property`);
-    const props = (ds as { properties?: Record<string, { type?: string; select?: { options?: unknown[] } }> })?.properties ?? {};
-    const missing = [STATUS, ...PREFERENCE_FIELDS].filter((p) => !(p in props));
-    if (missing.length) throw new Error(`${PREFERENCES} is missing propert${missing.length > 1 ? "ies" : "y"}: ${missing.join(", ")}`);
-    // A renamed option would otherwise match nothing and look like "no preferences apply".
-    if (!options.includes(WHOLE_WORKSPACE)) {
-      throw new Error(`${PREFERENCES} '${SCOPE}' has no '${WHOLE_WORKSPACE}' option. Options: ${options.join(", ")}`);
-    }
-    const status = props[STATUS];
-    if (status?.type !== "select") {
-      throw new Error(`${PREFERENCES} '${STATUS}' must be a select property (it is ${status?.type ?? "missing"})`);
-    }
-    const statusOptions = (status.select?.options ?? []).map((o) => (typeof o === "string" ? o : String((o as { name?: unknown })?.name ?? "")));
-    if (!statusOptions.includes(ADOPTED)) {
-      throw new Error(`${PREFERENCES} '${STATUS}' has no '${ADOPTED}' option. Options: ${statusOptions.join(", ")}`);
-    }
-    if (scope !== null && !options.includes(scope)) {
-      throw new Error(`Unknown scope "${scope}". Valid: ${options.join(", ")}`);
+    const path = `/v1/data_sources/${id}`;
+    const [ds, rows] = await Promise.all([schema(path), queryAll()]);
+    try {
+      checkPreferences(ds, scope);
+    } catch (e) {
+      // A cached schema may predate a new Scope option or Status edit: re-read it live once.
+      if (input.fresh === true) throw e;
+      checkPreferences(await live(path), scope);
     }
     return { scope, rows };
   }
@@ -185,7 +188,7 @@ export async function buildBundle(
     input.guides?.length
       ? named("guides", input.guides, async (n) => {
           const id = must(resolveGuide(markdown, n));
-          const g = (await get(`/v1/pages/${id}/markdown`)) as Markdown;
+          const g = (await live(`/v1/pages/${id}/markdown`)) as Markdown;
           if (typeof g?.markdown !== "string") throw new Error(`Guide "${n}" (${id}) returned no markdown`);
           if (g.truncated) errors.push({ section: `guides.${n}`, message: `Notion marked guide "${n}" truncated` });
           const gs = unrendered(g);
@@ -199,6 +202,30 @@ export async function buildBundle(
   if (schemas) bundle.schemas = schemas;
   if (guides) bundle.guides = guides;
   return bundle;
+}
+
+/** Throws unless the Preferences schema has what the query relies on and knows `scope`. */
+function checkPreferences(ds: unknown, scope: string | null): void {
+  const options = scopeOptions(ds);
+  if (!options) throw new Error(`${PREFERENCES} has no multi_select '${SCOPE}' property`);
+  const props = (ds as { properties?: Record<string, { type?: string; select?: { options?: unknown[] } }> })?.properties ?? {};
+  const missing = [STATUS, ...PREFERENCE_FIELDS].filter((p) => !(p in props));
+  if (missing.length) throw new Error(`${PREFERENCES} is missing propert${missing.length > 1 ? "ies" : "y"}: ${missing.join(", ")}`);
+  // A renamed option would otherwise match nothing and look like "no preferences apply".
+  if (!options.includes(WHOLE_WORKSPACE)) {
+    throw new Error(`${PREFERENCES} '${SCOPE}' has no '${WHOLE_WORKSPACE}' option. Options: ${options.join(", ")}`);
+  }
+  const status = props[STATUS];
+  if (status?.type !== "select") {
+    throw new Error(`${PREFERENCES} '${STATUS}' must be a select property (it is ${status?.type ?? "missing"})`);
+  }
+  const statusOptions = (status.select?.options ?? []).map((o) => (typeof o === "string" ? o : String((o as { name?: unknown })?.name ?? "")));
+  if (!statusOptions.includes(ADOPTED)) {
+    throw new Error(`${PREFERENCES} '${STATUS}' has no '${ADOPTED}' option. Options: ${statusOptions.join(", ")}`);
+  }
+  if (scope !== null && !options.includes(scope)) {
+    throw new Error(`Unknown scope "${scope}". Valid: ${options.join(", ")}`);
+  }
 }
 
 /** Room kept for `errors` and `pending` when judging whether one item could ever fit in a reply. */

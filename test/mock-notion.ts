@@ -41,6 +41,22 @@ const GOVERNANCE: Record<string, unknown> = {
 
 export const stats = { notionCalls: 0 };
 
+/** Calls per "METHOD path", readable through notion_request at GET /v1/mock/calls (format raw). */
+const routeCalls: Record<string, number> = {};
+
+// The Activity Log schema is mutable: PATCH /v1/data_sources/{AL_ID} with
+// { properties: { Name: { description } } } changes a field description, as Notion would.
+const alSchema: typeof AL_DS = structuredClone(AL_DS);
+function patchActivityLog(body: { properties?: Record<string, { description?: string }> }): Response {
+  for (const [name, change] of Object.entries(body.properties ?? {})) {
+    const p = (alSchema.properties as Record<string, { description?: string | null }>)[name];
+    if (!p) return json({ object: "error", status: 400, code: "validation_error", message: `mock: no property ${name}` }, 400);
+    if (change.description !== undefined) p.description = change.description;
+  }
+  GOVERNANCE[`GET /v1/data_sources/${AL_ID}`] = alSchema;
+  return json(alSchema);
+}
+
 const json = (obj: unknown, status = 200) =>
   new Response(JSON.stringify(obj), { status, headers: { "content-type": "application/json" } });
 
@@ -122,6 +138,12 @@ export async function mockFetch(input: RequestInfo | URL, init?: RequestInit): P
   const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url);
   const method = init?.method ?? "GET";
   const beta = new Headers(init?.headers).get("Notion-Beta");
+  if (method === "GET" && url.pathname === "/v1/mock/calls") return json({ object: "mock_calls", calls: routeCalls });
+  routeCalls[`${method} ${url.pathname}`] = (routeCalls[`${method} ${url.pathname}`] ?? 0) + 1;
+  if (method === "PATCH" && url.pathname === `/v1/data_sources/${AL_ID}`) {
+    stats.notionCalls++;
+    return patchActivityLog(JSON.parse(String(init?.body ?? "{}")));
+  }
   if (method === "POST" && url.pathname === "/v1/data_sources/mock-status/query") {
     stats.notionCalls++;
     return statusQuery(JSON.parse(String(init?.body ?? "{}")), beta);
