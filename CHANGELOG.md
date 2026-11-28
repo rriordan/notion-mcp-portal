@@ -2,7 +2,7 @@
 
 ## 1.6.0
 
-Fewer Notion calls per `governance_bundle`.
+Fewer Notion calls per `governance_bundle`, and no call waits on Notion forever.
 
 ### Added
 
@@ -11,6 +11,10 @@ Fewer Notion calls per `governance_bundle`.
 - **`cache`** on each `notion_call` log line for a cacheable schema read: `hit`, `miss` (no
   entry), `expired` (an entry past its 5-minute TTL) or `bypass` (a live read was asked for), so
   the hit rate and the TTL can be measured.
+- Per-call timeouts on Notion requests: 10 s for reads (retried once), 30 s for writes (never
+  re-sent; the error says the write may have landed and to read it back). Logged as
+  `error: "timeout"`. Timeouts don't use up the network-failure retries. The optional
+  `NOTION_TIMEOUT_MS` var sets the read timeout (writes get 3 times as long).
 
 ### Changed
 
@@ -27,6 +31,7 @@ Fewer Notion calls per `governance_bundle`.
 ### Fixed
 
 - A schema read that overlapped a write could refill the cache with pre-write data.
+- A Notion reply that stalled mid-body was neither retried nor logged.
 
 ## 1.5.0
 

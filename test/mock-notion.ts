@@ -134,12 +134,27 @@ function statusQuery(body: { filter?: { status?: Record<string, unknown> } }, be
   return json({ object: "list", results, next_cursor: null, has_more: false, type: "page_or_data_source", page_or_data_source: {} });
 }
 
+// /v1/pages/mock-slow (GET and PATCH) answers only after SLOW_MS, well past the mock config's
+// NOTION_TIMEOUT_MS (300 ms reads, 900 ms writes), and gives up early when the caller aborts,
+// as a real fetch would.
+const SLOW_MS = 3_000;
+function slowReply(signal: AbortSignal | undefined): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => resolve(json({ object: "page", id: "mock-slow" })), SLOW_MS);
+    signal?.addEventListener("abort", () => (clearTimeout(timer), reject(signal.reason)), { once: true });
+  });
+}
+
 export async function mockFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url);
   const method = init?.method ?? "GET";
   const beta = new Headers(init?.headers).get("Notion-Beta");
   if (method === "GET" && url.pathname === "/v1/mock/calls") return json({ object: "mock_calls", calls: routeCalls });
   routeCalls[`${method} ${url.pathname}`] = (routeCalls[`${method} ${url.pathname}`] ?? 0) + 1;
+  if (url.pathname === "/v1/pages/mock-slow" && (method === "GET" || method === "PATCH")) {
+    stats.notionCalls++;
+    return slowReply(init?.signal ?? undefined);
+  }
   if (method === "PATCH" && url.pathname === `/v1/data_sources/${AL_ID}`) {
     stats.notionCalls++;
     return patchActivityLog(JSON.parse(String(init?.body ?? "{}")));

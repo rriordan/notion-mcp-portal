@@ -5,9 +5,14 @@
  *    Wait as long as Retry-After says (capped), up to MAX_RETRIES times.
  *  - 502/503/504 and network failures: the call may or may not have run. Repeat only requests
  *    that change nothing (idempotent); a write is reported, never re-sent.
+ *  - Timeouts: every attempt gets `timeoutMs` (reply headers and body). A read that times out is
+ *    tried once more; a write that times out is never re-sent, since it may have landed. Timeouts
+ *    are counted apart from the MAX_RETRIES network and 5xx retries, so they don't use those up.
  *  - Everything else is final.
  */
 export const MAX_RETRIES = 3;
+/** Extra attempts after a timeout, for idempotent calls only. */
+export const MAX_TIMEOUT_RETRIES = 1;
 const MAX_WAIT_S = 10; // one wait
 const MAX_TOTAL_WAIT_S = 20; // all waits in one call
 
@@ -20,7 +25,36 @@ export type ErrorClass =
   | "conflict"
   | "invalid_request"
   | "upstream"
-  | "network";
+  | "network"
+  | "timeout";
+
+/** A call that got no usable reply; `cls` says whether it timed out or failed on the network. */
+export class FetchFailure extends Error {
+  readonly cls: "network" | "timeout";
+  constructor(message: string, cls: "network" | "timeout") {
+    super(message);
+    this.name = "FetchFailure";
+    this.cls = cls;
+  }
+}
+
+const isTimeout = (e: unknown) => (e as { name?: unknown } | null)?.name === "TimeoutError";
+
+/**
+ * Run one attempt under its own timeout. Raced against the signal as well as passed to it, so an
+ * attempt that ignores the signal (a body that stalls, a fake fetch) still ends on time.
+ */
+function attemptWithTimeout(doFetch: (signal: AbortSignal) => Promise<Response>, timeoutMs: number | undefined): Promise<Response> {
+  if (!timeoutMs) return doFetch(new AbortController().signal);
+  const signal = AbortSignal.timeout(timeoutMs);
+  return new Promise<Response>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    doFetch(signal)
+      .then(resolve, reject)
+      .finally(() => signal.removeEventListener("abort", onAbort));
+  });
+}
 
 export function classify(status: number, code?: string): { cls: ErrorClass; retryable: boolean } {
   if (status === 429) return { cls: code === "usage_limit_reached" ? "quota" : "rate_limited", retryable: code !== "usage_limit_reached" };
@@ -47,20 +81,37 @@ export function errorTag(status: number, code: string | undefined, retryAfter: s
 }
 
 export async function fetchWithRetry(
-  doFetch: () => Promise<Response>,
-  opts: { idempotent: boolean; sleep?: (ms: number) => Promise<void> },
+  doFetch: (signal: AbortSignal) => Promise<Response>,
+  opts: { idempotent: boolean; sleep?: (ms: number) => Promise<void>; timeoutMs?: number },
 ): Promise<{ res: Response; retries: number }> {
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   let waited = 0;
+  let timeouts = 0;
   for (let attempt = 0; ; attempt++) {
     let res: Response | undefined;
     let failure: unknown;
     try {
-      res = await doFetch();
+      res = await attemptWithTimeout(doFetch, opts.timeoutMs);
     } catch (e) {
       failure = e;
     }
-    const last = attempt >= MAX_RETRIES;
+    if (!res && isTimeout(failure)) {
+      const s = (opts.timeoutMs ?? 0) / 1000;
+      if (!opts.idempotent) {
+        throw new FetchFailure(
+          `Notion API timeout: no reply in ${s} s [class=timeout; not repeated: this request may have landed in Notion. Read it back (e.g. GET /v1/pages/{id}) before trying again]`,
+          "timeout",
+        );
+      }
+      if (timeouts < MAX_TIMEOUT_RETRIES) {
+        timeouts++;
+        await sleep(250);
+        continue;
+      }
+      throw new FetchFailure(`Notion API timeout: no reply in ${s} s, tried twice [class=timeout; retryable later]`, "timeout");
+    }
+    // Timeouts have their own budget, so they don't count against MAX_RETRIES.
+    const last = attempt - timeouts >= MAX_RETRIES;
     if (res) {
       if (res.status === 429 && !last) {
         const wait = retryAfterSeconds(res.headers.get("Retry-After"));
@@ -80,8 +131,9 @@ export async function fetchWithRetry(
       continue;
     }
     const why = failure instanceof Error ? failure.message : String(failure);
-    throw new Error(
+    throw new FetchFailure(
       `Notion API network error: ${why} [class=network; ${opts.idempotent ? "retried, still failing" : "not repeated: this request may have changed Notion, read it back before trying again"}]`,
+      "network",
     );
   }
 }

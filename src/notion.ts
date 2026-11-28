@@ -7,7 +7,7 @@
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import spec from "./notion-openapi.json" with { type: "json" };
 import { betaHeader, betaHint } from "./beta.ts";
-import { errorTag, fetchWithRetry } from "./retry.ts";
+import { errorTag, FetchFailure, fetchWithRetry } from "./retry.ts";
 import { isReplayable } from "./shape.ts";
 
 export { spec };
@@ -24,6 +24,22 @@ export interface Env {
    * governance_bundle tool is registered; it resolves stores and guides from that page's tables.
    */
   GOVERNANCE_README_ID?: string;
+  /**
+   * Optional: read timeout per Notion call in ms (default 10000). Writes get 3 times as long, as
+   * with the defaults (30000). Unset or invalid uses the defaults. The mock e2e config sets 300.
+   */
+  NOTION_TIMEOUT_MS?: string | number;
+}
+
+/** No reply (headers and body) within this long fails the attempt; a read is tried once more. */
+export const READ_TIMEOUT_MS = 10_000;
+/** Longer, so fewer writes end in "may have landed"; a write that times out is never re-sent. */
+export const WRITE_TIMEOUT_MS = 30_000;
+
+export function timeoutFor(env: Env, idempotent: boolean): number {
+  const n = Number(env.NOTION_TIMEOUT_MS);
+  const read = Number.isFinite(n) && n > 0 ? n : READ_TIMEOUT_MS;
+  return idempotent ? read : read * (WRITE_TIMEOUT_MS / READ_TIMEOUT_MS);
 }
 
 export interface NotionRequest {
@@ -229,10 +245,19 @@ async function send(
   const started = Date.now();
   let res: Response;
   let retries: number;
+  // The body is read inside the timed attempt, so a reply that stalls mid-body is a timeout like
+  // one that never starts (retried for a read, logged either way). Status and headers are kept,
+  // since Retry-After is read later.
+  const doFetch = async (signal: AbortSignal) => {
+    const r = await fetch(url, { method: opts.method, headers, body, signal });
+    const buffered = await r.text();
+    return new Response([204, 205, 304].includes(r.status) ? null : buffered, r);
+  };
   try {
-    ({ res, retries } = await fetchWithRetry(() => fetch(url, { method: opts.method, headers, body }), { idempotent }));
+    ({ res, retries } = await fetchWithRetry(doFetch, { idempotent, timeoutMs: timeoutFor(env, idempotent) }));
   } catch (e) {
-    logCall({ method: opts.method, path: url.pathname, ...betas, cached: false, ...cache, ms: Date.now() - started, status: 0, error: "network" });
+    const error = e instanceof FetchFailure ? e.cls : "network";
+    logCall({ method: opts.method, path: url.pathname, ...betas, cached: false, ...cache, ms: Date.now() - started, status: 0, error });
     throw e;
   }
   const text = await res.text();
