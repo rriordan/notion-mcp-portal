@@ -106,6 +106,68 @@ test("a query POST or a page write does not clear the schema cache", async () =>
   assert.equal(isSchemaWrite("GET", "/v1/data_sources/ds"), false);
 });
 
+// A page write that sets a select value Notion doesn't know adds that option to the parent schema.
+for (const [method, path] of [
+  ["POST", "/v1/pages"],
+  ["PATCH", "/v1/pages/p"],
+]) {
+  test(`a ${method} ${path} that sets properties clears the schema cache`, async () => {
+    const before = { object: "data_source", id: "ds", properties: { Tag: { type: "select", select: { options: [{ name: "Old" }] } } } };
+    const after = { ...before, properties: { Tag: { type: "select", select: { options: [{ name: "Old" }, { name: "New" }] } } } };
+    let schema = before;
+    const calls = [];
+    const realLog = console.log;
+    const logged = [];
+    console.log = (...args) => logged.push(args[0]);
+    try {
+      await withFetch(
+        async (url, init) => {
+          const key = `${init?.method ?? "GET"} ${new URL(url).pathname}`;
+          calls.push(key);
+          if (key === "GET /v1/data_sources/ds") return json(schema);
+          schema = after; // Notion adds the option as part of the page write.
+          return json({ object: "page", id: "p" });
+        },
+        async () => {
+          await notionRequest(env, { method: "GET", path: "/v1/data_sources/ds" });
+          const body = { ...(method === "POST" ? { parent: { data_source_id: "ds" } } : {}), properties: { Tag: { select: { name: "New" } } } };
+          await notionRequest(env, { method, path, body });
+          const next = await notionRequest(env, { method: "GET", path: "/v1/data_sources/ds" });
+          assert.deepEqual(
+            next.properties.Tag.select.options.map((o) => o.name),
+            ["Old", "New"],
+          );
+          assert.equal(calls.filter((c) => c === "GET /v1/data_sources/ds").length, 2, "fetched again");
+        },
+      );
+    } finally {
+      console.log = realLog;
+    }
+    const schemaLines = logged.filter((l) => l?.event === "notion_call" && l.path === "/v1/data_sources/ds");
+    assert.deepEqual(
+      schemaLines.map((l) => l.cache),
+      ["miss", "miss"],
+    );
+  });
+}
+
+test("a page PATCH without properties leaves the schema cache alone", async () => {
+  let calls = 0;
+  await withFetch(async () => (calls++, json({ object: "page", id: "p" })), async () => {
+    await notionRequest(env, { method: "GET", path: "/v1/data_sources/ds" });
+    await notionRequest(env, { method: "PATCH", path: "/v1/pages/p", body: { archived: true, icon: { emoji: "x" } } });
+    await notionRequest(env, { method: "PATCH", path: "/v1/pages/p", body: { properties: {} } });
+    await notionRequest(env, { method: "GET", path: "/v1/data_sources/ds" });
+    assert.equal(calls, 3, "the second schema read was a cache hit");
+  });
+  assert.equal(isSchemaWrite("POST", "/v1/pages", { properties: { Name: { title: [] } } }), true);
+  assert.equal(isSchemaWrite("PATCH", "/v1/pages/p", { properties: { Tag: { select: { name: "N" } } } }), true);
+  assert.equal(isSchemaWrite("PATCH", "/v1/pages/p", { in_trash: true }), false);
+  assert.equal(isSchemaWrite("PATCH", "/v1/pages/p/markdown", { properties: { Tag: {} } }), false);
+  assert.equal(isSchemaWrite("POST", "/v1/pages/p/move", { properties: { Tag: {} } }), false);
+  assert.equal(isSchemaWrite("GET", "/v1/pages/p", { properties: { Tag: {} } }), false);
+});
+
 test("schema reads log cache: miss, hit, expired or bypass; other calls carry no cache field", async () => {
   const realLog = console.log;
   const realNow = Date.now;

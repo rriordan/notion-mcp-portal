@@ -106,7 +106,8 @@ export async function verifyAccess(request: Request, env: Env): Promise<string |
 // Schema cache: GET /v1/databases/{id} and /v1/data_sources/{id} (no query string)
 // are kept for a few minutes per Worker isolate, so repeated schema reads don't spend
 // Notion's rate limit. A schema write (any non-GET to a database or data source other than a
-// query) clears the whole cache, since a database write can change its data sources. In-memory
+// query, or a page create or update that sets properties) clears the whole cache, since a database
+// write can change its data sources and a page write can add a select option to its parent. In-memory
 // only: it needs no binding and is lost when the isolate is recycled, which is harmless.
 //
 // Generation guard: a schema write bumps `schemaGen` and clears the cache both before it is sent
@@ -123,9 +124,20 @@ function schemaCacheKey(method: string, url: URL): string | null {
   return method === "GET" && !url.search && SCHEMA_PATH.test(url.pathname) ? url.pathname : null;
 }
 
-/** A write that can change a cached schema: a non-GET under /v1/databases/ or /v1/data_sources/, except queries. */
-export function isSchemaWrite(method: string, path: string): boolean {
-  return method !== "GET" && /^\/v1\/(databases|data_sources)\//.test(path) && !path.endsWith("/query");
+/**
+ * A write that can change a cached schema: a non-GET under /v1/databases/ or /v1/data_sources/,
+ * except queries; or a page create (POST /v1/pages) or update (PATCH /v1/pages/{id}) whose body
+ * sets properties, since a select or multi_select value Notion doesn't know yet becomes a new
+ * option on the parent data source. Page writes without properties (archive, icon, cover, move,
+ * content) don't touch a schema.
+ */
+export function isSchemaWrite(method: string, path: string, body?: unknown): boolean {
+  if (method === "GET") return false;
+  if (/^\/v1\/(databases|data_sources)\//.test(path)) return !path.endsWith("/query");
+  const pageWrite = (method === "POST" && path === "/v1/pages") || (method === "PATCH" && /^\/v1\/pages\/[^/]+$/.test(path));
+  if (!pageWrite) return false;
+  const props = (body as { properties?: unknown } | null | undefined)?.properties;
+  return typeof props === "object" && props !== null && !Array.isArray(props) && Object.keys(props).length > 0;
 }
 
 /**
@@ -163,7 +175,7 @@ export async function notionRequest(env: Env, opts: NotionRequest): Promise<unkn
 
   // A beta can change a response's shape, so beta reads neither use nor fill the schema cache.
   const cacheKey = beta ? null : schemaCacheKey(opts.method, url);
-  const schemaWrite = isSchemaWrite(opts.method, url.pathname);
+  const schemaWrite = isSchemaWrite(opts.method, url.pathname, opts.rawBody ? undefined : opts.body);
   let cache: { cache?: CacheStatus } = {};
   if (schemaWrite) {
     schemaGen++;

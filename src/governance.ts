@@ -98,15 +98,6 @@ export async function buildBundle(
   // unless `fresh`; duplicate schema reads within this call share one request (single-flight,
   // scoped to the call so no promise outlives the request that started it).
   const live = (path: string) => request({ method: "GET", path, noCache: true });
-  const inflight = new Map<string, Promise<unknown>>();
-  const schema = (path: string) => {
-    let p = inflight.get(path);
-    if (!p) {
-      p = request({ method: "GET", path, noCache: input.fresh === true });
-      inflight.set(path, p);
-    }
-    return p;
-  };
 
   let md: Markdown;
   try {
@@ -126,6 +117,34 @@ export async function buildBundle(
   const skipped = unrendered(md);
   if (skipped.length) errors.push({ section: "readme", message: unrenderedNote("the README", skipped) });
 
+  // One resolution per schema path per call. For the Preferences store (when the preferences
+  // section is wanted), that resolution includes the stale-cache retry: a cached copy that fails
+  // checkPreferences is replaced by a live read before anyone sees it, so the preferences section
+  // and a named Preferences schema always get the same copy. The live read is a noCache GET,
+  // which still stores its result in the schema cache, so the next call gets the refreshed copy.
+  const prefsStore = want.has("preferences") ? resolveStore(markdown, PREFERENCES) : null;
+  const prefsPath = prefsStore?.ok ? `/v1/data_sources/${prefsStore.value}` : null;
+  const scope = input.scope ?? null;
+  const passes = (ds: unknown) => {
+    try {
+      checkPreferences(ds, scope);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const inflight = new Map<string, Promise<unknown>>();
+  const schema = (path: string) => {
+    let p = inflight.get(path);
+    if (!p) {
+      p = request({ method: "GET", path, noCache: input.fresh === true });
+      // A cached schema may predate a new Scope option or Status edit: re-read it live once.
+      if (path === prefsPath && input.fresh !== true) p = p.then((ds) => (passes(ds) ? ds : live(path)));
+      inflight.set(path, p);
+    }
+    return p;
+  };
+
   /** Run one section; a resolve or Notion failure becomes an `errors` entry and null. */
   async function section<T>(name: string, work: () => Promise<T>): Promise<T | null> {
     try {
@@ -143,7 +162,6 @@ export async function buildBundle(
 
   async function preferences(): Promise<NonNullable<Bundle["preferences"]>> {
     const id = must(resolveStore(markdown, PREFERENCES));
-    const scope = input.scope ?? null;
     const queryAll = async () => {
       const rows: PreferenceRow[] = [];
       let cursor: string | undefined;
@@ -161,16 +179,10 @@ export async function buildBundle(
       } while (cursor);
       return rows;
     };
-    // The schema read (for scope validation) and the query run in parallel.
-    const path = `/v1/data_sources/${id}`;
-    const [ds, rows] = await Promise.all([schema(path), queryAll()]);
-    try {
-      checkPreferences(ds, scope);
-    } catch (e) {
-      // A cached schema may predate a new Scope option or Status edit: re-read it live once.
-      if (input.fresh === true) throw e;
-      checkPreferences(await live(path), scope);
-    }
+    // The schema read (for scope validation, with its stale-cache retry: see `schema`) and the
+    // query run in parallel.
+    const [ds, rows] = await Promise.all([schema(`/v1/data_sources/${id}`), queryAll()]);
+    checkPreferences(ds, scope);
     return { scope, rows };
   }
 
@@ -237,8 +249,9 @@ const FIT_SLACK = 1_000;
  * skipped (later, smaller ones still go in) and listed in `pending`, which is exactly the
  * arguments of the follow-up call. An item too long for any reply would stay pending forever,
  * so it becomes null plus an `errors` entry naming the notion_request call that reads it.
+ * `fresh: true` carries into `pending`, so the follow-up reads schemas live too.
  */
-export function fitBundle(bundle: Bundle, scope?: string, budget = MAX_TEXT): Bundle {
+export function fitBundle(bundle: Bundle, scope?: string, fresh?: boolean, budget = MAX_TEXT): Bundle {
   const size = (v: unknown) => JSON.stringify(v).length;
   if (size(bundle) <= budget) return bundle;
 
@@ -295,6 +308,7 @@ export function fitBundle(bundle: Bundle, scope?: string, budget = MAX_TEXT): Bu
         ...(schemas.length ? { schemas } : {}),
         ...(guides.length ? { guides } : {}),
         ...(scope !== undefined && names("sections").includes("preferences") ? { scope } : {}),
+        ...(fresh === true ? { fresh: true } : {}),
       };
     }
     return out as unknown as Bundle;

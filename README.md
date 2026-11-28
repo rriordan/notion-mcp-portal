@@ -94,7 +94,7 @@ Each Notion call writes one `notion_call` log line (method, path, status, `ms`, 
 - `cache`: only on cacheable schema reads (`GET /v1/databases/{id}` or `/v1/data_sources/{id}`, no query string, no `betas`). `hit` (served from the cache), `miss` (no entry), `expired` (an entry older than the 5-minute TTL; a high share of these says a longer TTL would pay) or `bypass` (`noCache` or `fresh: true` asked for a live read). Hit rate = `hit` / (`hit` + `miss` + `expired`).
 - `status`, `ms`, `retries`, and `code` on a Notion error; `error: "network"` with `status: 0` when no reply came; `betas` when the call sent any.
 
-Any write to a database or data source (other than a query) clears the whole schema cache.
+Any write to a database or data source (other than a query) clears the whole schema cache, and so does a page create or update that sets properties (it can add a select option).
 
 ## Security model
 

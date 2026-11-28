@@ -212,7 +212,7 @@ function buildServer(env: Env): McpServer {
       timed("governance_bundle", async ({ scope, guides, schemas, sections, fresh }) => {
         try {
           // Fitted by whole sections, so the reply is always valid JSON and text() never cuts it.
-          return text(fitBundle(await buildBundle(readmeId, { scope, guides, schemas, sections, fresh },(r) => notionRequest(env, r)), scope));
+          return text(fitBundle(await buildBundle(readmeId, { scope, guides, schemas, sections, fresh },(r) => notionRequest(env, r)), scope, fresh));
         } catch (e) {
           return text(String(e instanceof Error ? e.message : e), true);
         }
