@@ -1,7 +1,7 @@
 // Run with: npm test
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { notionRequest, READ_TIMEOUT_MS, responseText, SCHEMA_TTL_MS, schemaCache, timedFetch, timeoutFor, WRITE_TIMEOUT_MS } from "../src/notion.ts";
+import { notionRequest, READ_TIMEOUT_MS, resetSchemaStateForTests, responseText, SCHEMA_TTL_MS, schemaCache, timedFetch, timeoutFor, WRITE_TIMEOUT_MS } from "../src/notion.ts";
 import { classify, errorTag, fetchWithRetry, MAX_RETRIES, retryAfterSeconds } from "../src/retry.ts";
 
 const res = (status, headers = {}) => new Response("{}", { status, headers });
@@ -210,7 +210,7 @@ test("a schema write that times out keeps the schema cache off for SCHEMA_TTL_MS
   const get = () => notionRequest(env, { method: "GET", path: "/v1/data_sources/ds" });
   let schema = "old";
   let gets = 0;
-  schemaCache.clear();
+  resetSchemaStateForTests();
   try {
     const logged = await withFetch(
       (u, init) => {
@@ -240,7 +240,7 @@ test("a schema write that times out keeps the schema cache off for SCHEMA_TTL_MS
     );
   } finally {
     Date.now = realNow;
-    schemaCache.clear();
+    resetSchemaStateForTests();
   }
 });
 
@@ -276,7 +276,7 @@ test("a noCache read in the suspect window doesn't store the old schema past the
   Date.now = () => now;
   const env = { NOTION_TOKEN: "t", NOTION_TIMEOUT_MS: "20" };
   let schema = "old";
-  schemaCache.clear();
+  resetSchemaStateForTests();
   try {
     const logged = await withFetch(
       (u, init) => {
@@ -303,7 +303,7 @@ test("a noCache read in the suspect window doesn't store the old schema past the
     );
   } finally {
     Date.now = realNow;
-    schemaCache.clear();
+    resetSchemaStateForTests();
   }
 });
 
@@ -485,7 +485,7 @@ test("row 5: after a schema write's 2xx reply is lost, the next schema read is l
   const get = () => notionRequest(env, { method: "GET", path: "/v1/data_sources/ds" });
   let schema = "old";
   let gets = 0;
-  schemaCache.clear();
+  resetSchemaStateForTests();
   try {
     const logged = await withFetch(
       async (u, init) => {
@@ -513,18 +513,16 @@ test("row 5: after a schema write's 2xx reply is lost, the next schema read is l
       ["miss", "miss", "hit"],
     );
   } finally {
-    schemaCache.clear();
+    resetSchemaStateForTests();
   }
 });
 
 test("row 6: a schema write that gets 502, 503 or 504 starts the suspect window", async () => {
   const realNow = Date.now;
-  // Past any window an earlier test left, in fake or real time. The windows this test opens lie
-  // ~11 days ahead of real time, so a later test that reads schemas must fake its clock past them.
   let now = realNow() + 1e9;
   Date.now = () => now;
   const env = { NOTION_TOKEN: "t" };
-  schemaCache.clear();
+  resetSchemaStateForTests();
   try {
     for (const status of [502, 503, 504]) {
       now += SCHEMA_TTL_MS + 1; // past any earlier window
@@ -555,16 +553,16 @@ test("row 6: a schema write that gets 502, 503 or 504 starts the suspect window"
     }
   } finally {
     Date.now = realNow;
-    schemaCache.clear();
+    resetSchemaStateForTests();
   }
 });
 
 test("row 7: a schema write that gets a 400 starts no suspect window", async () => {
   const realNow = Date.now;
-  const t = realNow() + 2e9; // past row 6's windows and any earlier one
+  const t = realNow() + 2e9;
   Date.now = () => t;
   const env = { NOTION_TOKEN: "t" };
-  schemaCache.clear();
+  resetSchemaStateForTests();
   try {
     const logged = await withFetch(
       async (u, init) =>
@@ -586,7 +584,7 @@ test("row 7: a schema write that gets a 400 starts no suspect window", async () 
     );
   } finally {
     Date.now = realNow;
-    schemaCache.clear();
+    resetSchemaStateForTests();
   }
 });
 

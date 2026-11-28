@@ -149,6 +149,16 @@ let schemaGen = 0;
 /** Until this time (ms) the schema cache is off, after a schema write whose outcome is unknown. */
 let schemaSuspectUntil = 0;
 
+/**
+ * FOR TESTS ONLY. Empties the schema cache and ends any suspect window, so a test that fakes the
+ * clock can't leave later tests reading `suspect`. `schemaGen` is left alone: it is only compared
+ * with itself within one request, so its absolute value can't leak between tests.
+ */
+export function resetSchemaStateForTests(): void {
+  schemaCache.clear();
+  schemaSuspectUntil = 0;
+}
+
 function schemaCacheKey(method: string, url: URL): string | null {
   return method === "GET" && !url.search && SCHEMA_PATH.test(url.pathname) ? url.pathname : null;
 }
