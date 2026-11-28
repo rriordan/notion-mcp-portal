@@ -4,6 +4,8 @@
 
 `notion_request` can opt one request into a Notion API beta.
 
+Deployed 2026-11-27 as version `4eb52db3-c202-46d0-b9c5-dd21691017bc`; previous version (1.4.1) `0861eb91-0153-4ba8-8a2f-445997e79a37`.
+
 ### Added
 
 - **`betas`** on `notion_request`: allowlisted Notion API beta flags, sent as the `Notion-Beta`
