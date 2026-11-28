@@ -46,13 +46,20 @@ const isTimeout = (e: unknown) => (e as { name?: unknown } | null)?.name === "Ti
  */
 function attemptWithTimeout(doFetch: (signal: AbortSignal) => Promise<Response>, timeoutMs: number | undefined): Promise<Response> {
   if (!timeoutMs) return doFetch(new AbortController().signal);
-  const signal = AbortSignal.timeout(timeoutMs);
+  // A plain setTimeout, not AbortSignal.timeout: Node doesn't keep its process alive for the
+  // latter's timer, so a test whose fake fetch never settles would end before the timeout fires.
+  const ac = new AbortController();
+  const signal = ac.signal;
+  const timer = setTimeout(() => ac.abort(new DOMException(`no reply in ${timeoutMs} ms`, "TimeoutError")), timeoutMs);
   return new Promise<Response>((resolve, reject) => {
     const onAbort = () => reject(signal.reason);
     signal.addEventListener("abort", onAbort, { once: true });
     doFetch(signal)
       .then(resolve, reject)
-      .finally(() => signal.removeEventListener("abort", onAbort));
+      .finally(() => {
+        clearTimeout(timer);
+        signal.removeEventListener("abort", onAbort);
+      });
   });
 }
 
