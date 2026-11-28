@@ -36,10 +36,15 @@ export const READ_TIMEOUT_MS = 10_000;
 /** Longer, so fewer writes end in "may have landed"; a write that times out is never re-sent. */
 export const WRITE_TIMEOUT_MS = 30_000;
 
+/** Longest delay setTimeout honours; a longer one (or Infinity) fires at once or never as meant. */
+const MAX_TIMER_MS = 2_147_483_647;
+
 export function timeoutFor(env: Env, idempotent: boolean): number {
   const n = Number(env.NOTION_TIMEOUT_MS);
-  const read = Number.isFinite(n) && n > 0 ? n : READ_TIMEOUT_MS;
-  return idempotent ? read : read * (WRITE_TIMEOUT_MS / READ_TIMEOUT_MS);
+  const scale = WRITE_TIMEOUT_MS / READ_TIMEOUT_MS;
+  // Validated after scaling: a read timeout whose write timeout (×3) overflows the timer is invalid.
+  const read = Number.isFinite(n) && n > 0 && n * scale <= MAX_TIMER_MS ? n : READ_TIMEOUT_MS;
+  return idempotent ? read : read * scale;
 }
 
 export interface NotionRequest {
@@ -130,7 +135,7 @@ export async function verifyAccess(request: Request, env: Env): Promise<string |
 // and once it has finished. A cacheable GET stores its result only if the generation is
 // unchanged since it started, so a read that overlaps a write can't leave pre-write data cached.
 //
-// Unknown outcome: a schema write that times out or fails on the network may still land in Notion
+// Unknown outcome: a schema write that times out, fails on the network or gets a 502/503/504 may still land in Notion
 // later, after a read-back has refilled the cache with the old schema. So such a write turns the
 // cache off for SCHEMA_TTL_MS: schema GETs neither read nor fill it (logged `cache: "suspect"`, or
 // `bypass` for a noCache read, which doesn't fill it either).
@@ -167,8 +172,8 @@ export function isSchemaWrite(method: string, path: string, body?: unknown): boo
 /**
  * How a cacheable schema GET was answered, logged as `cache` on its notion_call line:
  * hit (served from the cache), miss (no entry), expired (an entry past its TTL),
- * bypass (noCache asked for a live read), suspect (cache off after a schema write that timed out
- * or failed on the network: read live, not stored).
+ * bypass (noCache asked for a live read), suspect (cache off after a schema write that timed out,
+ * failed on the network or got a 502/503/504: read live, not stored).
  */
 type CacheStatus = "hit" | "miss" | "expired" | "bypass" | "suspect";
 
@@ -225,7 +230,11 @@ export async function notionRequest(env: Env, opts: NotionRequest): Promise<unkn
   try {
     return await send(env, opts, url, beta, cacheKey, gen, cache);
   } catch (e) {
-    if (schemaWrite && e instanceof FetchFailure) schemaSuspectUntil = Date.now() + SCHEMA_TTL_MS;
+    // Outcome unknown: a timeout, a network failure, or a 502/503/504. A reply_lost write landed
+    // (Notion sent 2xx), so it needs only the clear below, like any finished write.
+    const status = (e as { status?: unknown } | null)?.status;
+    const unknown = e instanceof FetchFailure ? e.cls !== "reply_lost" : status === 502 || status === 503 || status === 504;
+    if (schemaWrite && unknown) schemaSuspectUntil = Date.now() + SCHEMA_TTL_MS;
     throw e;
   } finally {
     // A GET that overlapped this write may hold pre-write data: the bump stops one still in
@@ -255,6 +264,8 @@ export function timedFetch(url: URL, init: RequestInit, timeoutMs: number): DoFe
     // Headers only: the text travels in bodyText, so the body is decoded once (here), not again.
     const out = new Response(null, { status: r.status, statusText: r.statusText, headers: r.headers });
     if (r.ok) {
+      // Reported so a write whose body is then lost is known to have landed (reply_lost in retry.ts).
+      onHead?.(out);
       bodyText.set(out, await r.text());
       return out;
     }
@@ -333,8 +344,18 @@ async function send(
   try {
     ({ res, retries } = await fetchWithRetry(timedFetch(url, { method: opts.method, headers, body }, timeoutMs), { idempotent, timeoutMs }));
   } catch (e) {
-    const error = e instanceof FetchFailure ? e.cls : "network";
-    logCall({ method: opts.method, path: url.pathname, ...betas, cached: false, ...cache, ms: Date.now() - started, status: 0, error });
+    const f = e instanceof FetchFailure ? e : undefined;
+    logCall({
+      method: opts.method,
+      path: url.pathname,
+      ...betas,
+      cached: false,
+      ...cache,
+      ms: Date.now() - started,
+      status: f?.status ?? 0,
+      retries: f?.retries ?? 0,
+      error: f?.cls ?? "network",
+    });
     throw e;
   }
   const text = await responseText(res);
@@ -359,11 +380,15 @@ async function send(
   if (!res.ok) {
     // Surface Notion's error (code + message) so the model can self-correct.
     const hint = res.status === 400 ? await databaseHint(env, err?.message) : "";
-    throw new Error(
-      `Notion API ${res.status} ${err?.code ?? ""}: ${err?.message ?? text}`.trim() +
-        errorTag(res.status, err?.code, res.headers.get("Retry-After"), idempotent) +
-        hint +
-        (res.status === 400 ? betaHint(err?.message, opts.betas) : ""),
+    // `status` lets notionRequest tell a 5xx schema write (outcome unknown) from a final error.
+    throw Object.assign(
+      new Error(
+        `Notion API ${res.status} ${err?.code ?? ""}: ${err?.message ?? text}`.trim() +
+          errorTag(res.status, err?.code, res.headers.get("Retry-After"), idempotent) +
+          hint +
+          (res.status === 400 ? betaHint(err?.message, opts.betas) : ""),
+      ),
+      { status: res.status },
     );
   }
   // Stored only if no schema write started or finished since this read began (generation guard).

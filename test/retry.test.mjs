@@ -405,6 +405,237 @@ test("timeouts: reads 10 s, writes 30 s; NOTION_TIMEOUT_MS scales both", () => {
   assert.equal(timeoutFor({ NOTION_TIMEOUT_MS: "nope" }, true), READ_TIMEOUT_MS);
 });
 
+// --- 1.6.0 follow-up: lost 2xx write replies, 5xx schema writes, failure retries, timeout cap ---
+
+/** Headers at once, then the body fails ("connection reset") on the first read. */
+const brokenBody = (status) =>
+  new Response(new ReadableStream({ pull: (c) => c.error(new Error("connection reset")) }), { status });
+
+/** Run `fn` with every setTimeout shortened to 1 ms, so notionRequest's real backoff sleeps are fast. */
+async function fastTimers(fn) {
+  const real = globalThis.setTimeout;
+  globalThis.setTimeout = (cb, _ms, ...args) => real(cb, 1, ...args);
+  try {
+    return await fn();
+  } finally {
+    globalThis.setTimeout = real;
+  }
+}
+
+const assertReplyLost = (status) => (e) => {
+  assert.equal(e.cls, "reply_lost");
+  assert.match(e.message, new RegExp(`^Notion API ${status}: Notion accepted this write`));
+  assert.match(e.message, /class=reply_lost; not repeated: the write landed in Notion/);
+  assert.match(e.message, /stable identifier \(for a create, query for a unique property value\); don't resend/);
+  assert.doesNotMatch(e.message, /class=(network|timeout)|may have landed/);
+  return true;
+};
+
+test("row 1: a write whose 2xx body fails mid-read is reply_lost, sent once, logged with its status", async () => {
+  let calls = 0;
+  const logged = await withFetch(
+    async () => (calls++, brokenBody(200)),
+    () => assert.rejects(notionRequest({ NOTION_TOKEN: "t", NOTION_TIMEOUT_MS: "20" }, { method: "POST", path: "/v1/pages", body: {} }), assertReplyLost(200)),
+  );
+  assert.equal(calls, 1);
+  assert.equal(logged.length, 1);
+  assert.equal(logged[0].status, 200);
+  assert.equal(logged[0].error, "reply_lost");
+  assert.equal(logged[0].retries, 0);
+});
+
+test("row 2: a write whose 2xx body stalls past the deadline is reply_lost, not class=timeout", async () => {
+  let calls = 0;
+  const logged = await withFetch(
+    async () => (calls++, stalled(201)),
+    () => assert.rejects(notionRequest({ NOTION_TOKEN: "t", NOTION_TIMEOUT_MS: "20" }, { method: "POST", path: "/v1/pages", body: {} }), assertReplyLost(201)),
+  );
+  assert.equal(calls, 1);
+  assert.equal(logged[0].status, 201);
+  assert.equal(logged[0].error, "reply_lost");
+});
+
+test("row 3: a read whose 2xx body fails mid-read is retried, then ends class=network", async () => {
+  let calls = 0;
+  const url = new URL("https://api.notion.com/v1/pages/p");
+  await withFetch(
+    async () => (calls++, brokenBody(200)),
+    () =>
+      assert.rejects(fetchWithRetry(timedFetch(url, { method: "GET" }, 40), { idempotent: true, sleep, timeoutMs: 40 }), (e) => {
+        assert.equal(e.cls, "network");
+        assert.match(e.message, /class=network; retried, still failing/);
+        return true;
+      }),
+  );
+  assert.equal(calls, MAX_RETRIES + 1);
+});
+
+test("row 4: a read whose 2xx body stalls times out and is retried once", async () => {
+  let calls = 0;
+  const url = new URL("https://api.notion.com/v1/pages/p");
+  await withFetch(
+    async () => (calls++, stalled(200)),
+    () => assert.rejects(fetchWithRetry(timedFetch(url, { method: "GET" }, 20), { idempotent: true, sleep, timeoutMs: 20 }), /class=timeout; retryable later/),
+  );
+  assert.equal(calls, 2);
+});
+
+test("row 5: after a schema write's 2xx reply is lost, the next schema read is live", async () => {
+  const env = { NOTION_TOKEN: "t", NOTION_TIMEOUT_MS: "20" };
+  const get = () => notionRequest(env, { method: "GET", path: "/v1/data_sources/ds" });
+  let schema = "old";
+  let gets = 0;
+  schemaCache.clear();
+  try {
+    const logged = await withFetch(
+      async (u, init) => {
+        if (init.method === "PATCH") {
+          schema = "new"; // Notion applies the write, then the reply body is lost
+          return brokenBody(200);
+        }
+        gets++;
+        return new Response(JSON.stringify({ id: "ds", v: schema }), { status: 200 });
+      },
+      async () => {
+        assert.equal((await get()).v, "old"); // cached before the write
+        await assert.rejects(
+          notionRequest(env, { method: "PATCH", path: "/v1/data_sources/ds", body: { properties: { Tag: { select: {} } } } }),
+          assertReplyLost(200),
+        );
+        assert.equal((await get()).v, "new", "live, not the pre-write cached copy");
+        assert.equal(gets, 2);
+        assert.equal((await get()).v, "new");
+      },
+    );
+    // The write landed, so no suspect window: the post-write read is a miss and then caches as usual.
+    assert.deepEqual(
+      logged.filter((l) => l.method === "GET").map((l) => l.cache),
+      ["miss", "miss", "hit"],
+    );
+  } finally {
+    schemaCache.clear();
+  }
+});
+
+test("row 6: a schema write that gets 502, 503 or 504 starts the suspect window", async () => {
+  const realNow = Date.now;
+  // Past any window an earlier test left, in fake or real time. The windows this test opens lie
+  // ~11 days ahead of real time, so a later test that reads schemas must fake its clock past them.
+  let now = realNow() + 1e9;
+  Date.now = () => now;
+  const env = { NOTION_TOKEN: "t" };
+  schemaCache.clear();
+  try {
+    for (const status of [502, 503, 504]) {
+      now += SCHEMA_TTL_MS + 1; // past any earlier window
+      let gets = 0;
+      const logged = await withFetch(
+        async (u, init) => {
+          if (init.method === "PATCH") return new Response("{}", { status });
+          gets++;
+          return new Response('{"id":"ds"}', { status: 200 });
+        },
+        async () => {
+          await assert.rejects(
+            notionRequest(env, { method: "PATCH", path: "/v1/data_sources/ds", body: { title: [] } }),
+            new RegExp(`^Error: Notion API ${status}.*class=upstream; not repeated`),
+          );
+          now += SCHEMA_TTL_MS - 10; // still inside the window
+          await notionRequest(env, { method: "GET", path: "/v1/data_sources/ds" });
+          await notionRequest(env, { method: "GET", path: "/v1/data_sources/ds" });
+          assert.equal(gets, 2, `after ${status}: both reads live`);
+          assert.equal(schemaCache.size, 0, `after ${status}: nothing stored`);
+        },
+      );
+      assert.deepEqual(
+        logged.filter((l) => l.method === "GET").map((l) => l.cache),
+        ["suspect", "suspect"],
+        `after ${status}`,
+      );
+    }
+  } finally {
+    Date.now = realNow;
+    schemaCache.clear();
+  }
+});
+
+test("row 7: a schema write that gets a 400 starts no suspect window", async () => {
+  const realNow = Date.now;
+  const t = realNow() + 2e9; // past row 6's windows and any earlier one
+  Date.now = () => t;
+  const env = { NOTION_TOKEN: "t" };
+  schemaCache.clear();
+  try {
+    const logged = await withFetch(
+      async (u, init) =>
+        init.method === "PATCH"
+          ? new Response('{"code":"validation_error","message":"bad"}', { status: 400 })
+          : new Response('{"id":"ds"}', { status: 200 }),
+      async () => {
+        await assert.rejects(
+          notionRequest(env, { method: "PATCH", path: "/v1/data_sources/ds", body: { title: [] } }),
+          /Notion API 400 validation_error/,
+        );
+        await notionRequest(env, { method: "GET", path: "/v1/data_sources/ds" });
+        await notionRequest(env, { method: "GET", path: "/v1/data_sources/ds" });
+      },
+    );
+    assert.deepEqual(
+      logged.filter((l) => l.method === "GET").map((l) => l.cache),
+      ["miss", "hit"],
+    );
+  } finally {
+    Date.now = realNow;
+    schemaCache.clear();
+  }
+});
+
+test("row 8: a read whose timeouts exhaust the retry logs retries", async () => {
+  let calls = 0;
+  const logged = await fastTimers(() =>
+    withFetch(
+      (u, init) => (calls++, hang(init.signal)),
+      () => assert.rejects(notionRequest({ NOTION_TOKEN: "t" }, { method: "GET", path: "/v1/pages/slow" }), /class=timeout; retryable later/),
+    ),
+  );
+  assert.equal(calls, 2);
+  assert.equal(logged.length, 1);
+  assert.equal(logged[0].error, "timeout");
+  assert.equal(logged[0].status, 0);
+  assert.equal(logged[0].retries, 1);
+});
+
+test("row 9: a read whose network failures exhaust the retries logs retries", async () => {
+  let calls = 0;
+  const logged = await fastTimers(() =>
+    withFetch(
+      async () => {
+        calls++;
+        throw new TypeError("fetch failed");
+      },
+      () => assert.rejects(notionRequest({ NOTION_TOKEN: "t" }, { method: "GET", path: "/v1/pages/down" }), /class=network; retried, still failing/),
+    ),
+  );
+  assert.equal(calls, MAX_RETRIES + 1);
+  assert.equal(logged.length, 1);
+  assert.equal(logged[0].error, "network");
+  assert.equal(logged[0].retries, MAX_RETRIES);
+});
+
+test("row 10: a NOTION_TIMEOUT_MS whose 3x write timeout overflows the timer falls back to the defaults", () => {
+  for (const v of ["1e308", "715827883", 1e10]) {
+    assert.equal(timeoutFor({ NOTION_TIMEOUT_MS: v }, true), READ_TIMEOUT_MS, `read, ${v}`);
+    assert.equal(timeoutFor({ NOTION_TIMEOUT_MS: v }, false), WRITE_TIMEOUT_MS, `write, ${v}`);
+  }
+  // The largest value that still fits is kept.
+  assert.equal(timeoutFor({ NOTION_TIMEOUT_MS: "715827882" }, false), 2_147_483_646);
+});
+
+test("row 11: NOTION_TIMEOUT_MS=5000 gives 5 s reads and 15 s writes", () => {
+  assert.equal(timeoutFor({ NOTION_TIMEOUT_MS: "5000" }, true), 5_000);
+  assert.equal(timeoutFor({ NOTION_TIMEOUT_MS: "5000" }, false), 15_000);
+});
+
 test("errors are classed so a caller can tell partial, rate-limit, quota and auth failures apart", () => {
   assert.equal(classify(429, "rate_limited").cls, "rate_limited");
   assert.equal(classify(429, "usage_limit_reached").cls, "quota");

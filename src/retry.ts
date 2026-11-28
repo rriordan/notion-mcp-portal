@@ -9,6 +9,7 @@
  *    dropped instead, see timedFetch in notion.ts). A read that times out is
  *    tried once more; a write that times out is never re-sent, since it may have landed. Timeouts
  *    are counted apart from the MAX_RETRIES network and 5xx retries, so they don't use those up.
+ *  - A write whose 2xx status arrived but whose body was lost is reported as reply_lost: it landed.
  *  - Everything else is final.
  */
 export const MAX_RETRIES = 3;
@@ -27,32 +28,42 @@ export type ErrorClass =
   | "invalid_request"
   | "upstream"
   | "network"
-  | "timeout";
+  | "timeout"
+  | "reply_lost";
 
-/** A call that got no usable reply; `cls` says whether it timed out or failed on the network. */
+/**
+ * A call that got no usable reply; `cls` says whether it timed out, failed on the network, or (a
+ * write only) got a 2xx status whose body was then lost. `retries` is how many times it was re-sent;
+ * `status` is the HTTP status for reply_lost, else 0.
+ */
 export class FetchFailure extends Error {
-  readonly cls: "network" | "timeout";
-  constructor(message: string, cls: "network" | "timeout") {
+  readonly cls: "network" | "timeout" | "reply_lost";
+  readonly retries: number;
+  readonly status: number;
+  constructor(message: string, cls: "network" | "timeout" | "reply_lost", retries: number, status = 0) {
     super(message);
     this.name = "FetchFailure";
     this.cls = cls;
+    this.retries = retries;
+    this.status = status;
   }
 }
 
 const isTimeout = (e: unknown) => (e as { name?: unknown } | null)?.name === "TimeoutError";
 
 /**
- * One attempt. `onHead` lets it hand over a non-2xx reply as soon as its status and headers are in,
- * before its body is read (see timedFetch in notion.ts).
+ * One attempt. `onHead` lets it hand over a reply as soon as its status and headers are in, before
+ * its body is read (see timedFetch in notion.ts).
  */
 export type DoFetch = (signal: AbortSignal, onHead?: (head: Response) => void) => Promise<Response>;
 
 /**
  * Run one attempt under its own timeout. Raced against the signal as well as passed to it, so an
  * attempt that ignores the signal (a body that stalls, a fake fetch) still ends on time.
+ * `seen.head` is set once the reply's status and headers are in.
  */
-function attemptWithTimeout(doFetch: DoFetch, timeoutMs: number | undefined): Promise<Response> {
-  if (!timeoutMs) return doFetch(new AbortController().signal);
+function attemptWithTimeout(doFetch: DoFetch, timeoutMs: number | undefined, seen: { head?: Response }): Promise<Response> {
+  if (!timeoutMs) return doFetch(new AbortController().signal, (h) => (seen.head = h));
   // A plain setTimeout, not AbortSignal.timeout: Node doesn't keep its process alive for the
   // latter's timer, so a test whose fake fetch never settles would end before the timeout fires.
   const ac = new AbortController();
@@ -60,12 +71,13 @@ function attemptWithTimeout(doFetch: DoFetch, timeoutMs: number | undefined): Pr
   const timer = setTimeout(() => ac.abort(new DOMException(`no reply in ${timeoutMs} ms`, "TimeoutError")), timeoutMs);
   // Once a non-2xx status and headers are in, that reply is the outcome: if the deadline comes
   // while its body is still being read, the attempt resolves with the head (empty body) rather
-  // than timing out, so a 429 or 5xx is still handled by its status and Retry-After.
-  let head: Response | undefined;
+  // than timing out, so a 429 or 5xx is still handled by its status and Retry-After. A 2xx head is
+  // never the outcome on its own (its body is the result): the attempt times out, and
+  // fetchWithRetry sees `seen.head` to report a write as reply_lost.
   return new Promise<Response>((resolve, reject) => {
-    const onAbort = () => (head ? resolve(head) : reject(signal.reason));
+    const onAbort = () => (seen.head && !seen.head.ok ? resolve(seen.head) : reject(signal.reason));
     signal.addEventListener("abort", onAbort, { once: true });
-    doFetch(signal, (h) => (head = h))
+    doFetch(signal, (h) => (seen.head = h))
       .then(resolve, reject)
       .finally(() => {
         clearTimeout(timer);
@@ -108,10 +120,22 @@ export async function fetchWithRetry(
   for (let attempt = 0; ; attempt++) {
     let res: Response | undefined;
     let failure: unknown;
+    const seen: { head?: Response } = {};
     try {
-      res = await attemptWithTimeout(doFetch, opts.timeoutMs);
+      res = await attemptWithTimeout(doFetch, opts.timeoutMs, seen);
     } catch (e) {
       failure = e;
+    }
+    // A write whose 2xx status arrived but whose body was then lost (connection drop or stall past
+    // the deadline): Notion has confirmed it, so it is not "may have landed". A read is just retried.
+    if (!res && seen.head?.ok && !opts.idempotent) {
+      const status = seen.head.status;
+      throw new FetchFailure(
+        `Notion API ${status}: Notion accepted this write, but the reply body was lost [class=reply_lost; not repeated: the write landed in Notion. Find it by a stable identifier (for a create, query for a unique property value); don't resend]`,
+        "reply_lost",
+        attempt,
+        status,
+      );
     }
     if (!res && isTimeout(failure)) {
       const s = (opts.timeoutMs ?? 0) / 1000;
@@ -119,6 +143,7 @@ export async function fetchWithRetry(
         throw new FetchFailure(
           `Notion API timeout: no reply in ${s} s [class=timeout; not repeated: this request may have landed in Notion, or may still land after a delay. Check for it by a stable identifier (for a create, query for a unique property value); don't resend just because a first read-back shows nothing]`,
           "timeout",
+          attempt,
         );
       }
       if (timeouts < MAX_TIMEOUT_RETRIES) {
@@ -126,7 +151,7 @@ export async function fetchWithRetry(
         await sleep(250);
         continue;
       }
-      throw new FetchFailure(`Notion API timeout: no reply in ${s} s, tried twice [class=timeout; retryable later]`, "timeout");
+      throw new FetchFailure(`Notion API timeout: no reply in ${s} s, tried twice [class=timeout; retryable later]`, "timeout", attempt);
     }
     // Timeouts have their own budget, so they don't count against MAX_RETRIES.
     const last = attempt - timeouts >= MAX_RETRIES;
@@ -152,6 +177,7 @@ export async function fetchWithRetry(
     throw new FetchFailure(
       `Notion API network error: ${why} [class=network; ${opts.idempotent ? "retried, still failing" : "not repeated: this request may have changed Notion, read it back before trying again"}]`,
       "network",
+      attempt,
     );
   }
 }

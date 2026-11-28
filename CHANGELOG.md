@@ -20,6 +20,10 @@ Fewer Notion calls per `governance_bundle`, and no call waits on Notion forever.
   `cache: "suspect"`; a `noCache` read in that window doesn't fill it either). A rate-limit or
   server error whose body stalls or fails mid-way is handled as that error, not as a timeout or
   network error.
+- `error: "reply_lost"` (`class=reply_lost`): a write whose 2xx status arrived but whose body
+  was then lost (connection drop, or a stall past the deadline) is reported with its status as
+  having landed (find it by a stable identifier, don't resend), not as "may have landed".
+  Reads in the same situation are retried as before.
 
 ### Changed
 
@@ -37,6 +41,12 @@ Fewer Notion calls per `governance_bundle`, and no call waits on Notion forever.
 
 - A schema read that overlapped a write could refill the cache with pre-write data.
 - A Notion reply that stalled mid-body was neither retried nor logged.
+- A schema write that gets a 502, 503 or 504 also turns the schema cache off for 5 minutes
+  (`cache: "suspect"`), since its outcome is just as unknown as a timed-out one.
+- `notion_call` lines for calls that end in a timeout, network failure or lost reply now
+  include `retries`.
+- A `NOTION_TIMEOUT_MS` whose write timeout (3×) would exceed 2147483647 ms (for example `1e308`)
+  falls back to the defaults instead of leaving writes without a deadline.
 
 ## 1.5.0
 
