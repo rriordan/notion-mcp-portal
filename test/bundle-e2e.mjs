@@ -3,6 +3,7 @@
 // BUNDLE_EXPECT=absent checks the tool is NOT listed (a deployment without GOVERNANCE_README_ID).
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { AL_ID } from "./fixtures/readme.ts";
 
 const URL_ = process.env.SMOKE_MCP_URL ?? "http://127.0.0.1:8788/mcp";
 let failed = 0;
@@ -35,6 +36,27 @@ if (process.env.BUNDLE_EXPECT === "absent") {
     check("readme markdown present", typeof b?.readme?.markdown === "string" && b.readme.markdown.length > 0);
     check("field rules carry descriptions", Boolean(b?.activity_log_fields?.fields?.some((f) => f.description)));
     check("preferences rows without Evidence", Array.isArray(b?.preferences?.rows) && b.preferences.rows.length > 0 && !("Evidence" in b.preferences.rows[0]));
+
+    // Store schemas use the 5-minute schema cache; a write through this Worker is seen at once.
+    const notion = async (args) => (await mcp.callTool({ name: "notion_request", arguments: args })).content?.[0]?.text ?? "";
+    const alPath = `/v1/data_sources/${AL_ID}`;
+    const alReads = async () => JSON.parse(await notion({ method: "GET", path: "/v1/mock/calls", format: "raw" })).calls[`GET ${alPath}`] ?? 0;
+    const summary = (bundle) => bundle?.activity_log_fields?.fields?.find((f) => f.name === "Summary")?.description;
+    let n0 = await alReads();
+    await call({});
+    await call({});
+    check("two bundles read the Activity Log schema at most once", (await alReads()) - n0 <= 1, `${(await alReads()) - n0} reads`);
+    await notion({ method: "PATCH", path: alPath, body: { properties: { Summary: { description: "Two lines, present tense." } } } });
+    n0 = await alReads();
+    const after = JSON.parse((await call({})).raw);
+    check("a schema write through this Worker is seen by the next bundle", summary(after) === "Two lines, present tense.", String(summary(after)));
+    check("the bundle after a write re-reads the schema once", (await alReads()) - n0 === 1, `${(await alReads()) - n0} reads`);
+    n0 = await alReads();
+    await call({ schemas: ["Activity Log"] });
+    check("schemas: [Activity Log] with a warm cache adds no read", (await alReads()) === n0, `${(await alReads()) - n0} reads`);
+    n0 = await alReads();
+    const fresh = await call({ fresh: true, schemas: ["Activity Log"] });
+    check("fresh: true reads the schema live, once for the core and the named schema", !fresh.isError && (await alReads()) - n0 === 1, `${(await alReads()) - n0} reads`);
 
     // A bundle over the reply cap stays valid JSON: whole sections, the rest named in `pending`.
     const parse = (r) => {

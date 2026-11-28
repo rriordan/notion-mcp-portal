@@ -198,19 +198,21 @@ function buildServer(env: Env): McpServer {
       {
         description:
           "Session-start governance in one call: the workspace README, Activity Log field rules, and Adopted Preferences " +
-          "for a Scope (Evidence omitted), read live. Optional: named guides or store schemas. " +
+          "for a Scope (Evidence omitted). Rules and preferences are read live; store schemas may be up to 5 minutes old " +
+          "(fresh: true reads them live). Optional: named guides or store schemas. " +
           "If the result has `pending`, call again with exactly those arguments for the rest.",
         inputSchema: {
           scope: z.string().optional().describe("Preferences Scope option; omitted = Whole workspace rows only"),
           guides: z.array(z.string()).max(3).optional().describe("Guide names from the README's Guides table"),
           schemas: z.array(z.string()).max(3).optional().describe("Store names from the README's Where things go table"),
           sections: z.array(z.enum(SECTIONS)).optional().describe("Core sections to return; omitted = all, [] = only the named guides and schemas"),
+          fresh: z.boolean().optional().describe("Read store schemas live, skipping the 5-minute cache"),
         },
       },
-      timed("governance_bundle", async ({ scope, guides, schemas, sections }) => {
+      timed("governance_bundle", async ({ scope, guides, schemas, sections, fresh }) => {
         try {
           // Fitted by whole sections, so the reply is always valid JSON and text() never cuts it.
-          return text(fitBundle(await buildBundle(readmeId, { scope, guides, schemas, sections }, (r) => notionRequest(env, r)), scope));
+          return text(fitBundle(await buildBundle(readmeId, { scope, guides, schemas, sections, fresh },(r) => notionRequest(env, r)), scope, fresh));
         } catch (e) {
           return text(String(e instanceof Error ? e.message : e), true);
         }

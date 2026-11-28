@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.6.0
+
+Fewer Notion calls per `governance_bundle`.
+
+### Added
+
+- **`fresh`** on `governance_bundle`: read store schemas live instead of from the 5-minute
+  schema cache. A `pending` follow-up keeps `fresh: true`.
+- **`cache`** on each `notion_call` log line for a cacheable schema read: `hit`, `miss` (no
+  entry), `expired` (an entry past its 5-minute TTL) or `bypass` (a live read was asked for), so
+  the hit rate and the TTL can be measured.
+
+### Changed
+
+- `governance_bundle` store schemas (Activity Log, Preferences and named `schemas`) use the
+  5-minute schema cache; the README, guides and Preferences rows are still read live. A cached
+  Preferences schema that rejects the scope (or lacks an option the bundle needs) is re-read
+  live once before the error is returned; the whole reply (including a named Preferences schema)
+  and the cache then use the live copy. A schema read twice in one call is fetched once.
+- A schema write (any non-GET to `/v1/databases/…` or `/v1/data_sources/…` other than a query)
+  clears the whole schema cache, not only its own path, since a database write can change its
+  data sources. So does a page create or update that sets properties, since it can add a
+  select or multi_select option.
+
+### Fixed
+
+- A schema read that overlapped a write could refill the cache with pre-write data.
+
 ## 1.5.0
 
 `notion_request` can opt one request into a Notion API beta.

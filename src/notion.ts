@@ -33,7 +33,7 @@ export interface NotionRequest {
   body?: unknown;
   contentType?: string;
   rawBody?: boolean;
-  /** Skip the schema-cache read (the fresh result is still stored). For reads that must be live. */
+  /** Skip the schema-cache read (the live result is still stored, generation guard permitting). For reads that must be live. */
   noCache?: boolean;
   /** Opt-in Notion API betas, sent as the Notion-Beta header. Allowlisted in beta.ts. */
   betas?: string[];
@@ -105,16 +105,47 @@ export async function verifyAccess(request: Request, env: Env): Promise<string |
 // ---------------------------------------------------------------------------
 // Schema cache: GET /v1/databases/{id} and /v1/data_sources/{id} (no query string)
 // are kept for a few minutes per Worker isolate, so repeated schema reads don't spend
-// Notion's rate limit. Any write to the same path clears its entry. In-memory only:
-// it needs no binding and is lost when the isolate is recycled, which is harmless.
+// Notion's rate limit. A schema write (any non-GET to a database or data source other than a
+// query, or a page create or update that sets properties) clears the whole cache, since a database
+// write can change its data sources and a page write can add a select option to its parent. In-memory
+// only: it needs no binding and is lost when the isolate is recycled, which is harmless.
+//
+// Generation guard: a schema write bumps `schemaGen` and clears the cache both before it is sent
+// and once it has finished. A cacheable GET stores its result only if the generation is
+// unchanged since it started, so a read that overlaps a write can't leave pre-write data cached.
 // ---------------------------------------------------------------------------
-const SCHEMA_TTL_MS = 5 * 60_000;
+/** How long a cached schema is served. One constant so it can be tuned from the `cache` log field. */
+export const SCHEMA_TTL_MS = 5 * 60_000;
 const SCHEMA_PATH = /^\/v1\/(databases|data_sources)\/[^/]+$/;
 export const schemaCache = new Map<string, { data: unknown; expires: number }>();
+let schemaGen = 0;
 
 function schemaCacheKey(method: string, url: URL): string | null {
   return method === "GET" && !url.search && SCHEMA_PATH.test(url.pathname) ? url.pathname : null;
 }
+
+/**
+ * A write that can change a cached schema: a non-GET under /v1/databases/ or /v1/data_sources/,
+ * except queries; or a page create (POST /v1/pages) or update (PATCH /v1/pages/{id}) whose body
+ * sets properties, since a select or multi_select value Notion doesn't know yet becomes a new
+ * option on the parent data source. Page writes without properties (archive, icon, cover, move,
+ * content) don't touch a schema.
+ */
+export function isSchemaWrite(method: string, path: string, body?: unknown): boolean {
+  if (method === "GET") return false;
+  if (/^\/v1\/(databases|data_sources)\//.test(path)) return !path.endsWith("/query");
+  const pageWrite = (method === "POST" && path === "/v1/pages") || (method === "PATCH" && /^\/v1\/pages\/[^/]+$/.test(path));
+  if (!pageWrite) return false;
+  const props = (body as { properties?: unknown } | null | undefined)?.properties;
+  return typeof props === "object" && props !== null && !Array.isArray(props) && Object.keys(props).length > 0;
+}
+
+/**
+ * How a cacheable schema GET was answered, logged as `cache` on its notion_call line:
+ * hit (served from the cache), miss (no entry), expired (an entry past its TTL),
+ * bypass (noCache asked for a live read).
+ */
+type CacheStatus = "hit" | "miss" | "expired" | "bypass";
 
 /**
  * One structured line per Notion call, for Workers Logs: where the time goes (Notion, retries,
@@ -144,15 +175,44 @@ export async function notionRequest(env: Env, opts: NotionRequest): Promise<unkn
 
   // A beta can change a response's shape, so beta reads neither use nor fill the schema cache.
   const cacheKey = beta ? null : schemaCacheKey(opts.method, url);
-  if (opts.method !== "GET") schemaCache.delete(url.pathname);
-  else if (cacheKey && !opts.noCache) {
-    const hit = schemaCache.get(cacheKey);
-    if (hit && hit.expires > Date.now()) {
-      logCall({ method: opts.method, path: url.pathname, cached: true, ms: 0 });
-      return hit.data;
+  const schemaWrite = isSchemaWrite(opts.method, url.pathname, opts.rawBody ? undefined : opts.body);
+  let cache: { cache?: CacheStatus } = {};
+  if (schemaWrite) {
+    schemaGen++;
+    schemaCache.clear();
+  } else if (cacheKey) {
+    if (opts.noCache) cache = { cache: "bypass" };
+    else {
+      const entry = schemaCache.get(cacheKey);
+      if (entry && entry.expires > Date.now()) {
+        logCall({ method: opts.method, path: url.pathname, cached: true, cache: "hit", ms: 0 });
+        return entry.data;
+      }
+      cache = { cache: entry ? "expired" : "miss" };
     }
   }
+  const gen = schemaGen;
+  try {
+    return await send(env, opts, url, beta, cacheKey, gen, cache);
+  } finally {
+    // A GET that overlapped this write may hold pre-write data: the bump stops one still in
+    // flight from storing it, and the clear drops one that already finished and stored it.
+    if (schemaWrite) {
+      schemaGen++;
+      schemaCache.clear();
+    }
+  }
+}
 
+async function send(
+  env: Env,
+  opts: NotionRequest,
+  url: URL,
+  beta: string | undefined,
+  cacheKey: string | null,
+  gen: number,
+  cache: { cache?: CacheStatus },
+): Promise<unknown> {
   const headers: Record<string, string> = {
     Authorization: `Bearer ${env.NOTION_TOKEN}`,
     "Notion-Version": notionVersionFor(opts.method, url.pathname),
@@ -172,7 +232,7 @@ export async function notionRequest(env: Env, opts: NotionRequest): Promise<unkn
   try {
     ({ res, retries } = await fetchWithRetry(() => fetch(url, { method: opts.method, headers, body }), { idempotent }));
   } catch (e) {
-    logCall({ method: opts.method, path: url.pathname, ...betas, cached: false, ms: Date.now() - started, status: 0, error: "network" });
+    logCall({ method: opts.method, path: url.pathname, ...betas, cached: false, ...cache, ms: Date.now() - started, status: 0, error: "network" });
     throw e;
   }
   const text = await res.text();
@@ -188,6 +248,7 @@ export async function notionRequest(env: Env, opts: NotionRequest): Promise<unkn
     path: url.pathname,
     ...betas,
     cached: false,
+    ...cache,
     ms: Date.now() - started,
     status: res.status,
     retries,
@@ -203,7 +264,8 @@ export async function notionRequest(env: Env, opts: NotionRequest): Promise<unkn
         (res.status === 400 ? betaHint(err?.message, opts.betas) : ""),
     );
   }
-  if (cacheKey) schemaCache.set(cacheKey, { data, expires: Date.now() + SCHEMA_TTL_MS });
+  // Stored only if no schema write started or finished since this read began (generation guard).
+  if (cacheKey && gen === schemaGen) schemaCache.set(cacheKey, { data, expires: Date.now() + SCHEMA_TTL_MS });
   return data;
 }
 

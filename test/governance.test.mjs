@@ -94,7 +94,62 @@ test("clean bundle", async () => {
   assert.ok(!("Evidence" in b.preferences.rows[0]));
   assert.ok(!("schemas" in b) && !("guides" in b));
   assert.ok(calls.length >= 4);
+  // Rules (Markdown) and the Preferences query are live; store schemas may come from the cache.
+  const schemaReads = calls.filter((r) => r.method === "GET" && r.path.startsWith("/v1/data_sources/"));
+  assert.equal(schemaReads.length, 2);
+  assert.ok(schemaReads.every((r) => !r.noCache));
+  assert.ok(calls.filter((r) => !schemaReads.includes(r)).every((r) => r.noCache === true));
+});
+
+const schemaGets = (calls, id) => calls.filter((r) => r.method === "GET" && r.path === `/v1/data_sources/${id}`);
+
+test("schemas naming the core stores reads each schema once", async () => {
+  const { calls, request } = fakeNotion();
+  const b = await buildBundle("readme", { schemas: ["Preferences", "Activity Log"] }, request);
+  assert.deepEqual(b.errors, []);
+  assert.equal(b.schemas.Preferences.data_source_id, PREFS_ID);
+  assert.deepEqual(b.schemas["Activity Log"], b.activity_log_fields);
+  assert.equal(schemaGets(calls, PREFS_ID).length, 1);
+  assert.equal(schemaGets(calls, AL_ID).length, 1);
+});
+
+test("fresh: true reads schemas with noCache", async () => {
+  const { calls, request } = fakeNotion();
+  const b = await buildBundle("readme", { fresh: true, schemas: ["Preferences"] }, request);
+  assert.deepEqual(b.errors, []);
+  assert.ok(calls.length >= 4);
   assert.ok(calls.every((r) => r.noCache === true));
+});
+
+test("a cached schema that rejects the scope is re-read once fresh", async () => {
+  // The cached copy predates the "Team A" option.
+  const stale = { ...PREFS_DS, properties: { ...PREFS_DS.properties, Scope: { type: "multi_select", multi_select: { options: [{ name: "Whole workspace" }] } } } };
+  let n = 0;
+  const { calls, request } = fakeNotion({ [`GET /v1/data_sources/${PREFS_ID}`]: () => (n++ === 0 ? stale : PREFS_DS) });
+  const b = await buildBundle("readme", { scope: "Team A" }, request);
+  assert.deepEqual(b.errors, []);
+  assert.equal(b.preferences.scope, "Team A");
+  const reads = schemaGets(calls, PREFS_ID);
+  assert.equal(reads.length, 2);
+  assert.deepEqual(
+    reads.map((r) => r.noCache === true),
+    [false, true],
+  );
+});
+
+test("a schema that is still wrong after the fresh read errors as before", async () => {
+  const { calls, request } = fakeNotion();
+  const b = await buildBundle("readme", { scope: "Nope" }, request);
+  assert.equal(b.preferences, null);
+  assert.match(b.errors.find((x) => x.section === "preferences").message, /Unknown scope "Nope"/);
+  assert.equal(schemaGets(calls, PREFS_ID).length, 2);
+});
+
+test("with fresh: true a rejected scope is not re-read", async () => {
+  const { calls, request } = fakeNotion();
+  const b = await buildBundle("readme", { scope: "Nope", fresh: true }, request);
+  assert.equal(b.preferences, null);
+  assert.equal(schemaGets(calls, PREFS_ID).length, 1);
 });
 
 test("no scope means Whole workspace only", async () => {
@@ -276,11 +331,11 @@ const fits = (b) => JSON.stringify(b).length <= BUDGET;
 
 test("fitBundle leaves a bundle under the cap alone", () => {
   const b = { ...core(), guides: { A: guide(3000) } };
-  assert.equal(fitBundle(b, "Team A", BUDGET), b);
+  assert.equal(fitBundle(b, "Team A", undefined, BUDGET), b);
 });
 
 test("fitBundle keeps the core and moves guides that don't fit to pending", () => {
-  const out = fitBundle({ ...core(), guides: { A: guide(3000), B: guide(3000) } }, "Team A", BUDGET);
+  const out = fitBundle({ ...core(), guides: { A: guide(3000), B: guide(3000) } }, "Team A", undefined, BUDGET);
   assert.ok(fits(out));
   assert.equal(Object.keys(out)[0], "errors");
   assert.equal(out.readme.markdown.length, 1000);
@@ -294,6 +349,7 @@ test("fitBundle skips what doesn't fit and still takes later, smaller items", ()
   const out = fitBundle(
     { ...core(), schemas: { Big: big, Small: { data_source_id: "t", fields: [] } }, guides: { A: guide(3000), B: guide(3000), C: guide(50) } },
     undefined,
+    undefined,
     BUDGET,
   );
   assert.ok(fits(out));
@@ -303,7 +359,7 @@ test("fitBundle skips what doesn't fit and still takes later, smaller items", ()
 });
 
 test("fitBundle: a guide too long for any reply is nulled with the call that reads it", () => {
-  const out = fitBundle({ ...core(), guides: { A: guide(6000), B: guide(50) } }, undefined, BUDGET);
+  const out = fitBundle({ ...core(), guides: { A: guide(6000), B: guide(50) } }, undefined, undefined, BUDGET);
   assert.ok(fits(out));
   assert.equal(out.guides.A, null);
   assert.equal(out.guides.B.markdown.length, 50);
@@ -316,7 +372,7 @@ test("fitBundle: a core that is itself over the cap sheds sections to pending, w
   const b = core();
   b.activity_log_fields.fields = [{ name: x(2500), type: "title" }];
   b.preferences.rows = [{ Preference: x(2500) }];
-  const out = fitBundle(b, "Team A", BUDGET);
+  const out = fitBundle(b, "Team A", undefined, BUDGET);
   assert.ok(fits(out));
   assert.ok(out.readme && out.activity_log_fields);
   assert.ok(!("preferences" in out));
@@ -326,7 +382,7 @@ test("fitBundle: a core that is itself over the cap sheds sections to pending, w
 test("fitBundle: a README too long for any reply is nulled with the call that reads it", () => {
   const b = core();
   b.readme.markdown = x(6000);
-  const out = fitBundle(b, undefined, BUDGET);
+  const out = fitBundle(b, undefined, undefined, BUDGET);
   assert.ok(fits(out));
   assert.deepEqual(out.readme, { id: "r", markdown: null });
   assert.match(out.errors.find((r) => r.section === "readme").message, /GET \/v1\/pages\/r\/markdown/);
@@ -338,9 +394,67 @@ test("following pending returns the rest", async () => {
   const { request } = fakeNotion({ [`GET /v1/pages/${GUIDE_ID}/markdown`]: { object: "page_markdown", markdown: long, truncated: false } });
   const args = { scope: "Team A", guides: ["Tool Guide"] };
   const budget = JSON.stringify(await buildBundle("readme", { scope: "Team A" }, request)).length + 3000;
-  const first = fitBundle(await buildBundle("readme", args, request), args.scope, budget);
+  const first = fitBundle(await buildBundle("readme", args, request), args.scope, undefined, budget);
   assert.deepEqual(first.pending, { sections: [], guides: ["Tool Guide"] });
-  const rest = fitBundle(await buildBundle("readme", first.pending, request), first.pending.scope, budget);
+  const rest = fitBundle(await buildBundle("readme", first.pending, request), first.pending.scope, undefined, budget);
   assert.deepEqual(Object.keys(rest), ["errors", "guides"]);
   assert.equal(rest.guides["Tool Guide"].markdown, long);
+});
+
+test("fitBundle keeps fresh: true in pending, and adds no fresh key otherwise", () => {
+  const b = () => ({ ...core(), guides: { A: guide(3000), B: guide(3000) } });
+  assert.deepEqual(fitBundle(b(), "Team A", true, BUDGET).pending, { sections: [], guides: ["B"], fresh: true });
+  const plain = fitBundle(b(), "Team A", undefined, BUDGET).pending;
+  assert.deepEqual(plain, { sections: [], guides: ["B"] });
+  assert.ok(!("fresh" in plain));
+  assert.ok(!("fresh" in fitBundle(b(), "Team A", false, BUDGET).pending));
+});
+
+// ---------------------------------------------------------------------------
+// One Preferences schema per reply, and the refreshed copy reaches the cache
+// ---------------------------------------------------------------------------
+import { notionRequest, schemaCache } from "../src/notion.ts";
+
+test("a stale cached Preferences schema is refreshed for every section of the reply and for the next call", async () => {
+  // The cached copy predates the "Team A" option.
+  const stale = withOptions("Scope", "multi_select", ["Whole workspace"]);
+  const routes = {
+    "GET /v1/pages/readme/markdown": { object: "page_markdown", markdown: README_MD, truncated: false, unknown_block_ids: [] },
+    [`GET /v1/data_sources/${AL_ID}`]: AL_DS,
+    [`GET /v1/data_sources/${PREFS_ID}`]: PREFS_DS,
+    [`POST /v1/data_sources/${PREFS_ID}/query`]: { object: "list", results: [], has_more: false, next_cursor: null },
+  };
+  const fetched = [];
+  const realFetch = globalThis.fetch;
+  const realLog = console.log;
+  globalThis.fetch = async (url, init) => {
+    const key = `${init?.method ?? "GET"} ${new URL(url).pathname}`;
+    fetched.push(key);
+    const body = routes[key];
+    return new Response(JSON.stringify(body ?? { object: "error", code: "object_not_found", message: key }), { status: body ? 200 : 404 });
+  };
+  console.log = () => {};
+  schemaCache.clear();
+  try {
+    const env = { NOTION_TOKEN: "t" };
+    const request = (r) => notionRequest(env, r);
+    schemaCache.set(`/v1/data_sources/${PREFS_ID}`, { data: stale, expires: Date.now() + 60_000 });
+    const prefsReads = () => fetched.filter((k) => k === `GET /v1/data_sources/${PREFS_ID}`).length;
+
+    const b = await buildBundle("readme", { scope: "Team A", schemas: ["Preferences"] }, request);
+    assert.deepEqual(b.errors, []);
+    assert.equal(b.preferences.scope, "Team A");
+    const scopeField = b.schemas.Preferences.fields.find((f) => f.name === "Scope");
+    assert.ok(scopeField.options.includes("Team A"), "the named schema is the live copy");
+    assert.equal(prefsReads(), 1, "one live re-read, shared by both sections");
+
+    const again = await buildBundle("readme", { scope: "Team A", schemas: ["Preferences"] }, request);
+    assert.deepEqual(again.errors, []);
+    assert.ok(again.schemas.Preferences.fields.find((f) => f.name === "Scope").options.includes("Team A"));
+    assert.equal(prefsReads(), 1, "the second call is served the refreshed copy from the cache");
+  } finally {
+    globalThis.fetch = realFetch;
+    console.log = realLog;
+    schemaCache.clear();
+  }
 });
