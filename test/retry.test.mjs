@@ -239,6 +239,97 @@ test("a schema write that times out keeps the schema cache off for SCHEMA_TTL_MS
   }
 });
 
+test("a 429 whose body fails mid-way is retried as a 429 for a write, not a network error", async () => {
+  waits.length = 0;
+  let calls = 0;
+  const url = new URL("https://api.notion.com/v1/pages");
+  const broken = () => {
+    let pulls = 0;
+    const body = new ReadableStream({
+      pull(c) {
+        if (pulls++ === 0) c.enqueue(new TextEncoder().encode('{"code":"rate_'));
+        else c.error(new Error("connection reset"));
+      },
+    });
+    return new Response(body, { status: 429, headers: { "Retry-After": "0" } });
+  };
+  await withFetch(
+    async () => (++calls === 1 ? broken() : new Response('{"ok":true}', { status: 200 })),
+    async () => {
+      const out = await fetchWithRetry(timedFetch(url, { method: "POST" }, 40), { idempotent: false, sleep, timeoutMs: 40 });
+      assert.equal(out.res.status, 200);
+      assert.equal(out.retries, 1);
+    },
+  );
+  assert.equal(calls, 2);
+  assert.deepEqual(waits, [1000], "slept per Retry-After, not reported as network or timeout");
+});
+
+test("a noCache read in the suspect window doesn't store the old schema past the window", async () => {
+  const realNow = Date.now;
+  let now = 5_000_000;
+  Date.now = () => now;
+  const env = { NOTION_TOKEN: "t", NOTION_TIMEOUT_MS: "20" };
+  let schema = "old";
+  schemaCache.clear();
+  try {
+    const logged = await withFetch(
+      (u, init) => {
+        if (init.method === "PATCH") return hang(init.signal);
+        return Promise.resolve(new Response(JSON.stringify({ id: "ds", v: schema }), { status: 200 }));
+      },
+      async () => {
+        await assert.rejects(
+          notionRequest(env, { method: "PATCH", path: "/v1/data_sources/ds", body: { properties: { Tag: { select: {} } } } }),
+          /class=timeout/,
+        );
+        now += SCHEMA_TTL_MS - 10; // late in the window, so a stored entry would outlive it
+        const fresh = await notionRequest(env, { method: "GET", path: "/v1/data_sources/ds", noCache: true });
+        assert.equal(fresh.v, "old");
+        assert.equal(schemaCache.size, 0, "the noCache read stored nothing");
+        schema = "new"; // the write lands late
+        now += 11; // window over
+        assert.equal((await notionRequest(env, { method: "GET", path: "/v1/data_sources/ds" })).v, "new");
+      },
+    );
+    assert.deepEqual(
+      logged.filter((l) => l.method === "GET").map((l) => l.cache),
+      ["bypass", "miss"],
+    );
+  } finally {
+    Date.now = realNow;
+    schemaCache.clear();
+  }
+});
+
+test("a 503 body that never finishes is cancelled once the cap expires", async () => {
+  let cancelled = 0;
+  const body = new ReadableStream({ start() {}, cancel: () => void cancelled++ });
+  const url = new URL("https://api.notion.com/v1/pages/p");
+  await withFetch(
+    async () => new Response(body, { status: 503, headers: { "Retry-After": "2" } }),
+    async () => {
+      const r = await timedFetch(url, { method: "GET" }, 40)(new AbortController().signal);
+      assert.equal(r.status, 503);
+      assert.equal(r.headers.get("Retry-After"), "2");
+      assert.equal(await r.text(), "");
+    },
+  );
+  assert.equal(cancelled, 1, "the abandoned body was cancelled");
+});
+
+test("a non-2xx reply with no body still works", async () => {
+  const url = new URL("https://api.notion.com/v1/pages/p");
+  await withFetch(
+    async () => new Response(null, { status: 502 }),
+    async () => {
+      const r = await timedFetch(url, { method: "GET" }, 40)(new AbortController().signal);
+      assert.equal(r.status, 502);
+      assert.equal(await r.text(), "");
+    },
+  );
+});
+
 test("timeouts: reads 10 s, writes 30 s; NOTION_TIMEOUT_MS scales both", () => {
   assert.equal(timeoutFor({}, true), READ_TIMEOUT_MS);
   assert.equal(timeoutFor({}, false), WRITE_TIMEOUT_MS);

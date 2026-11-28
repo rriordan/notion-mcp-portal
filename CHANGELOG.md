@@ -16,8 +16,9 @@ Fewer Notion calls per `governance_bundle`, and no call waits on Notion forever.
   `error: "timeout"`. Timeouts don't use up the network-failure retries. The optional
   `NOTION_TIMEOUT_MS` var sets the read timeout (writes get 3 times as long). A schema change
   that times out may still land, so it turns the schema cache off for 5 minutes (logged
-  `cache: "suspect"`). A rate-limit or server error whose body stalls is handled as that error,
-  not as a timeout.
+  `cache: "suspect"`; a `noCache` read in that window doesn't fill it either). A rate-limit or
+  server error whose body stalls or fails mid-way is handled as that error, not as a timeout or
+  network error.
 
 ### Changed
 

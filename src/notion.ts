@@ -132,7 +132,8 @@ export async function verifyAccess(request: Request, env: Env): Promise<string |
 //
 // Unknown outcome: a schema write that times out or fails on the network may still land in Notion
 // later, after a read-back has refilled the cache with the old schema. So such a write turns the
-// cache off for SCHEMA_TTL_MS: schema GETs neither read nor fill it (logged `cache: "suspect"`).
+// cache off for SCHEMA_TTL_MS: schema GETs neither read nor fill it (logged `cache: "suspect"`, or
+// `bypass` for a noCache read, which doesn't fill it either).
 // A later successful schema write doesn't end the window, since the earlier one may land after it.
 // ---------------------------------------------------------------------------
 /** How long a cached schema is served. One constant so it can be tuned from the `cache` log field. */
@@ -205,10 +206,12 @@ export async function notionRequest(env: Env, opts: NotionRequest): Promise<unkn
     schemaGen++;
     schemaCache.clear();
   } else if (cacheKey) {
-    if (opts.noCache) cache = { cache: "bypass" };
-    else if (Date.now() < schemaSuspectUntil) {
-      cache = { cache: "suspect" };
-      cacheKey = null; // read live and don't store
+    const suspect = Date.now() < schemaSuspectUntil;
+    if (opts.noCache || suspect) {
+      // Read live. In the suspect window nothing is stored either, noCache included: a noCache read
+      // of the old schema would otherwise outlive the window. A noCache read keeps the `bypass` label.
+      cache = { cache: opts.noCache ? "bypass" : "suspect" };
+      if (suspect) cacheKey = null;
     } else {
       const entry = schemaCache.get(cacheKey);
       if (entry && entry.expires > Date.now()) {
@@ -241,8 +244,9 @@ export const ERROR_BODY_CAP_MS = 2_000;
  * One attempt for fetchWithRetry. A 2xx body is read inside the timed attempt, so a reply that
  * stalls mid-body is a timeout like one that never starts (retried for a read, logged either way).
  * A non-2xx body gets its own cap (ERROR_BODY_CAP_MS, or half of what is left of the attempt, so it
- * always ends before the attempt does); if it stalls, the reply goes on with an empty body, so a
- * 429 or 5xx is still retried or reported from its status and Retry-After, not as a timeout.
+ * always ends before the attempt does); if it stalls or fails mid-way, the reply goes on with an
+ * empty body, so a 429 or 5xx is still retried or reported from its status and Retry-After, not
+ * as a timeout or network error.
  */
 export function timedFetch(url: URL, init: RequestInit, timeoutMs: number): (signal: AbortSignal) => Promise<Response> {
   return async (signal) => {
@@ -252,15 +256,40 @@ export function timedFetch(url: URL, init: RequestInit, timeoutMs: number): (sig
     if (r.ok) buffered = await r.text();
     else {
       const cap = Math.max(0, Math.min(ERROR_BODY_CAP_MS, (timeoutMs - (Date.now() - started)) / 2));
-      let resolveStalled: (s: string) => void = () => {};
-      const stalled = new Promise<string>((resolve) => (resolveStalled = resolve));
-      const timer = setTimeout(() => resolveStalled(""), cap);
-      const text = r.text();
-      text.catch(() => {}); // a body that fails after the cap won must not be an unhandled rejection
-      buffered = await Promise.race([text, stalled]).finally(() => clearTimeout(timer));
+      buffered = await readErrorBody(r.body, cap);
     }
     return new Response([204, 205, 304].includes(r.status) ? null : buffered, r);
   };
+}
+
+/**
+ * The text of a non-2xx body, or "" if it doesn't finish within `capMs` or fails mid-way. An
+ * abandoned body is cancelled, so it stops consuming the upstream stream while retries go on.
+ */
+async function readErrorBody(body: ReadableStream<Uint8Array> | null, capMs: number): Promise<string> {
+  if (!body) return "";
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let resolveCap: (v: "cap") => void = () => {};
+  const expired = new Promise<"cap">((resolve) => (resolveCap = resolve));
+  const timer = setTimeout(() => resolveCap("cap"), capMs);
+  let text = "";
+  try {
+    for (;;) {
+      const read = reader.read();
+      read.catch(() => {}); // a read that fails after the cap won must not be an unhandled rejection
+      const next = await Promise.race([read, expired]);
+      if (next === "cap") break;
+      if (next.done) return text + decoder.decode();
+      text += decoder.decode(next.value, { stream: true });
+    }
+  } catch {
+    /* the body failed mid-way: go on without it */
+  } finally {
+    clearTimeout(timer);
+  }
+  reader.cancel().catch(() => {});
+  return "";
 }
 
 async function send(
