@@ -5,7 +5,8 @@
  *    Wait as long as Retry-After says (capped), up to MAX_RETRIES times.
  *  - 502/503/504 and network failures: the call may or may not have run. Repeat only requests
  *    that change nothing (idempotent); a write is reported, never re-sent.
- *  - Timeouts: every attempt gets `timeoutMs` (reply headers and body). A read that times out is
+ *  - Timeouts: every attempt gets `timeoutMs` (reply headers and a 2xx body; a stalled error body is
+ *    dropped instead, see timedFetch in notion.ts). A read that times out is
  *    tried once more; a write that times out is never re-sent, since it may have landed. Timeouts
  *    are counted apart from the MAX_RETRIES network and 5xx retries, so they don't use those up.
  *  - Everything else is final.

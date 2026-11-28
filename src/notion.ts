@@ -129,12 +129,19 @@ export async function verifyAccess(request: Request, env: Env): Promise<string |
 // Generation guard: a schema write bumps `schemaGen` and clears the cache both before it is sent
 // and once it has finished. A cacheable GET stores its result only if the generation is
 // unchanged since it started, so a read that overlaps a write can't leave pre-write data cached.
+//
+// Unknown outcome: a schema write that times out or fails on the network may still land in Notion
+// later, after a read-back has refilled the cache with the old schema. So such a write turns the
+// cache off for SCHEMA_TTL_MS: schema GETs neither read nor fill it (logged `cache: "suspect"`).
+// A later successful schema write doesn't end the window, since the earlier one may land after it.
 // ---------------------------------------------------------------------------
 /** How long a cached schema is served. One constant so it can be tuned from the `cache` log field. */
 export const SCHEMA_TTL_MS = 5 * 60_000;
 const SCHEMA_PATH = /^\/v1\/(databases|data_sources)\/[^/]+$/;
 export const schemaCache = new Map<string, { data: unknown; expires: number }>();
 let schemaGen = 0;
+/** Until this time (ms) the schema cache is off, after a schema write whose outcome is unknown. */
+let schemaSuspectUntil = 0;
 
 function schemaCacheKey(method: string, url: URL): string | null {
   return method === "GET" && !url.search && SCHEMA_PATH.test(url.pathname) ? url.pathname : null;
@@ -159,9 +166,10 @@ export function isSchemaWrite(method: string, path: string, body?: unknown): boo
 /**
  * How a cacheable schema GET was answered, logged as `cache` on its notion_call line:
  * hit (served from the cache), miss (no entry), expired (an entry past its TTL),
- * bypass (noCache asked for a live read).
+ * bypass (noCache asked for a live read), suspect (cache off after a schema write that timed out
+ * or failed on the network: read live, not stored).
  */
-type CacheStatus = "hit" | "miss" | "expired" | "bypass";
+type CacheStatus = "hit" | "miss" | "expired" | "bypass" | "suspect";
 
 /**
  * One structured line per Notion call, for Workers Logs: where the time goes (Notion, retries,
@@ -190,7 +198,7 @@ export async function notionRequest(env: Env, opts: NotionRequest): Promise<unkn
   }
 
   // A beta can change a response's shape, so beta reads neither use nor fill the schema cache.
-  const cacheKey = beta ? null : schemaCacheKey(opts.method, url);
+  let cacheKey = beta ? null : schemaCacheKey(opts.method, url);
   const schemaWrite = isSchemaWrite(opts.method, url.pathname, opts.rawBody ? undefined : opts.body);
   let cache: { cache?: CacheStatus } = {};
   if (schemaWrite) {
@@ -198,7 +206,10 @@ export async function notionRequest(env: Env, opts: NotionRequest): Promise<unkn
     schemaCache.clear();
   } else if (cacheKey) {
     if (opts.noCache) cache = { cache: "bypass" };
-    else {
+    else if (Date.now() < schemaSuspectUntil) {
+      cache = { cache: "suspect" };
+      cacheKey = null; // read live and don't store
+    } else {
       const entry = schemaCache.get(cacheKey);
       if (entry && entry.expires > Date.now()) {
         logCall({ method: opts.method, path: url.pathname, cached: true, cache: "hit", ms: 0 });
@@ -210,6 +221,9 @@ export async function notionRequest(env: Env, opts: NotionRequest): Promise<unkn
   const gen = schemaGen;
   try {
     return await send(env, opts, url, beta, cacheKey, gen, cache);
+  } catch (e) {
+    if (schemaWrite && e instanceof FetchFailure) schemaSuspectUntil = Date.now() + SCHEMA_TTL_MS;
+    throw e;
   } finally {
     // A GET that overlapped this write may hold pre-write data: the bump stops one still in
     // flight from storing it, and the clear drops one that already finished and stored it.
@@ -218,6 +232,35 @@ export async function notionRequest(env: Env, opts: NotionRequest): Promise<unkn
       schemaCache.clear();
     }
   }
+}
+
+/** Longest wait for the body of a non-2xx reply (see timedFetch). */
+export const ERROR_BODY_CAP_MS = 2_000;
+
+/**
+ * One attempt for fetchWithRetry. A 2xx body is read inside the timed attempt, so a reply that
+ * stalls mid-body is a timeout like one that never starts (retried for a read, logged either way).
+ * A non-2xx body gets its own cap (ERROR_BODY_CAP_MS, or half of what is left of the attempt, so it
+ * always ends before the attempt does); if it stalls, the reply goes on with an empty body, so a
+ * 429 or 5xx is still retried or reported from its status and Retry-After, not as a timeout.
+ */
+export function timedFetch(url: URL, init: RequestInit, timeoutMs: number): (signal: AbortSignal) => Promise<Response> {
+  return async (signal) => {
+    const started = Date.now();
+    const r = await fetch(url, { ...init, signal });
+    let buffered: string;
+    if (r.ok) buffered = await r.text();
+    else {
+      const cap = Math.max(0, Math.min(ERROR_BODY_CAP_MS, (timeoutMs - (Date.now() - started)) / 2));
+      let resolveStalled: (s: string) => void = () => {};
+      const stalled = new Promise<string>((resolve) => (resolveStalled = resolve));
+      const timer = setTimeout(() => resolveStalled(""), cap);
+      const text = r.text();
+      text.catch(() => {}); // a body that fails after the cap won must not be an unhandled rejection
+      buffered = await Promise.race([text, stalled]).finally(() => clearTimeout(timer));
+    }
+    return new Response([204, 205, 304].includes(r.status) ? null : buffered, r);
+  };
 }
 
 async function send(
@@ -245,16 +288,9 @@ async function send(
   const started = Date.now();
   let res: Response;
   let retries: number;
-  // The body is read inside the timed attempt, so a reply that stalls mid-body is a timeout like
-  // one that never starts (retried for a read, logged either way). Status and headers are kept,
-  // since Retry-After is read later.
-  const doFetch = async (signal: AbortSignal) => {
-    const r = await fetch(url, { method: opts.method, headers, body, signal });
-    const buffered = await r.text();
-    return new Response([204, 205, 304].includes(r.status) ? null : buffered, r);
-  };
+  const timeoutMs = timeoutFor(env, idempotent);
   try {
-    ({ res, retries } = await fetchWithRetry(doFetch, { idempotent, timeoutMs: timeoutFor(env, idempotent) }));
+    ({ res, retries } = await fetchWithRetry(timedFetch(url, { method: opts.method, headers, body }, timeoutMs), { idempotent, timeoutMs }));
   } catch (e) {
     const error = e instanceof FetchFailure ? e.cls : "network";
     logCall({ method: opts.method, path: url.pathname, ...betas, cached: false, ...cache, ms: Date.now() - started, status: 0, error });

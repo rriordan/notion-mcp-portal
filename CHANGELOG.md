@@ -14,7 +14,10 @@ Fewer Notion calls per `governance_bundle`, and no call waits on Notion forever.
 - Per-call timeouts on Notion requests: 10 s for reads (retried once), 30 s for writes (never
   re-sent; the error says the write may have landed and to read it back). Logged as
   `error: "timeout"`. Timeouts don't use up the network-failure retries. The optional
-  `NOTION_TIMEOUT_MS` var sets the read timeout (writes get 3 times as long).
+  `NOTION_TIMEOUT_MS` var sets the read timeout (writes get 3 times as long). A schema change
+  that times out may still land, so it turns the schema cache off for 5 minutes (logged
+  `cache: "suspect"`). A rate-limit or server error whose body stalls is handled as that error,
+  not as a timeout.
 
 ### Changed
 

@@ -91,7 +91,7 @@ Two generic tools cover the whole API, so the tool list stays small. The model l
 Each Notion call writes one `notion_call` log line (method, path, status, `ms`, retries, whether the schema cache answered) to Workers Logs, so you can see where time goes. Paths include page and data source IDs; query strings, bodies and the token are never logged. Fields:
 
 - `cached`: `true` when the schema cache answered and Notion wasn't called.
-- `cache`: only on cacheable schema reads (`GET /v1/databases/{id}` or `/v1/data_sources/{id}`, no query string, no `betas`). `hit` (served from the cache), `miss` (no entry), `expired` (an entry older than the 5-minute TTL; a high share of these says a longer TTL would pay) or `bypass` (`noCache` or `fresh: true` asked for a live read). Hit rate = `hit` / (`hit` + `miss` + `expired`).
+- `cache`: only on cacheable schema reads (`GET /v1/databases/{id}` or `/v1/data_sources/{id}`, no query string, no `betas`). `hit` (served from the cache), `miss` (no entry), `expired` (an entry older than the 5-minute TTL; a high share of these says a longer TTL would pay), `bypass` (`noCache` or `fresh: true` asked for a live read) or `suspect` (cache off for 5 minutes after a schema write that timed out or failed on the network, since it may still land). Hit rate = `hit` / (`hit` + `miss` + `expired`).
 - `status`, `ms`, `retries`, and `code` on a Notion error; `error: "network"` with `status: 0` when no reply came, or `error: "timeout"` when no complete reply came in time; `betas` when the call sent any.
 
 Any write to a database or data source (other than a query) clears the whole schema cache, and so does a page create or update that sets properties (it can add a select option).
