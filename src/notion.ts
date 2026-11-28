@@ -7,7 +7,7 @@
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import spec from "./notion-openapi.json" with { type: "json" };
 import { betaHeader, betaHint } from "./beta.ts";
-import { errorTag, FetchFailure, fetchWithRetry } from "./retry.ts";
+import { type DoFetch, errorTag, FetchFailure, fetchWithRetry } from "./retry.ts";
 import { isReplayable } from "./shape.ts";
 
 export { spec };
@@ -248,18 +248,30 @@ export const ERROR_BODY_CAP_MS = 2_000;
  * empty body, so a 429 or 5xx is still retried or reported from its status and Retry-After, not
  * as a timeout or network error.
  */
-export function timedFetch(url: URL, init: RequestInit, timeoutMs: number): (signal: AbortSignal) => Promise<Response> {
-  return async (signal) => {
+export function timedFetch(url: URL, init: RequestInit, timeoutMs: number): DoFetch {
+  return async (signal, onHead) => {
     const started = Date.now();
     const r = await fetch(url, { ...init, signal });
-    let buffered: string;
-    if (r.ok) buffered = await r.text();
-    else {
-      const cap = Math.max(0, Math.min(ERROR_BODY_CAP_MS, (timeoutMs - (Date.now() - started)) / 2));
-      buffered = await readErrorBody(r.body, cap);
+    // Headers only: the text travels in bodyText, so the body is decoded once (here), not again.
+    const out = new Response(null, { status: r.status, statusText: r.statusText, headers: r.headers });
+    if (r.ok) {
+      bodyText.set(out, await r.text());
+      return out;
     }
-    return new Response([204, 205, 304].includes(r.status) ? null : buffered, r);
+    bodyText.set(out, "");
+    onHead?.(out); // the attempt's outcome from here on, even if its deadline comes mid-body
+    const cap = Math.max(0, Math.min(ERROR_BODY_CAP_MS, (timeoutMs - (Date.now() - started)) / 2));
+    bodyText.set(out, await readErrorBody(r.body, cap));
+    return out;
   };
+}
+
+/** The decoded body of a Response made by timedFetch. */
+const bodyText = new WeakMap<Response, string>();
+
+/** A reply's text: carried from timedFetch if it made the Response, else read from the body. */
+export async function responseText(res: Response): Promise<string> {
+  return bodyText.get(res) ?? (await res.text());
 }
 
 /**
@@ -325,7 +337,7 @@ async function send(
     logCall({ method: opts.method, path: url.pathname, ...betas, cached: false, ...cache, ms: Date.now() - started, status: 0, error });
     throw e;
   }
-  const text = await res.text();
+  const text = await responseText(res);
   let data: unknown = text;
   try {
     data = JSON.parse(text);

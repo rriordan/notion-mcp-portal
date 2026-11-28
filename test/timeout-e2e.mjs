@@ -41,7 +41,7 @@ check("a slow read gives up well before the mock replies", readMs < 2_500, `${re
 const patch0 = await count(`PATCH ${SLOW}`);
 const write = await call({ method: "PATCH", path: SLOW, body: { archived: false } });
 const patches = (await count(`PATCH ${SLOW}`)) - patch0;
-check("a slow write says it may have landed", write.isError && /class=timeout.*may have landed.*Read it back/.test(write.text), write.text.slice(0, 200));
+check("a slow write says it may have landed", write.isError && /class=timeout.*may have landed.*don't resend just because a first read-back shows nothing/.test(write.text), write.text.slice(0, 200));
 check("a slow write is sent once", patches === 1, `${patches} calls`);
 
 const fast = await call({ method: "POST", path: "/v1/data_sources/mock-ds/query", body: { page_size: 5 }, format: "values" });

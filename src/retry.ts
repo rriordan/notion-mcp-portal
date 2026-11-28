@@ -42,20 +42,30 @@ export class FetchFailure extends Error {
 const isTimeout = (e: unknown) => (e as { name?: unknown } | null)?.name === "TimeoutError";
 
 /**
+ * One attempt. `onHead` lets it hand over a non-2xx reply as soon as its status and headers are in,
+ * before its body is read (see timedFetch in notion.ts).
+ */
+export type DoFetch = (signal: AbortSignal, onHead?: (head: Response) => void) => Promise<Response>;
+
+/**
  * Run one attempt under its own timeout. Raced against the signal as well as passed to it, so an
  * attempt that ignores the signal (a body that stalls, a fake fetch) still ends on time.
  */
-function attemptWithTimeout(doFetch: (signal: AbortSignal) => Promise<Response>, timeoutMs: number | undefined): Promise<Response> {
+function attemptWithTimeout(doFetch: DoFetch, timeoutMs: number | undefined): Promise<Response> {
   if (!timeoutMs) return doFetch(new AbortController().signal);
   // A plain setTimeout, not AbortSignal.timeout: Node doesn't keep its process alive for the
   // latter's timer, so a test whose fake fetch never settles would end before the timeout fires.
   const ac = new AbortController();
   const signal = ac.signal;
   const timer = setTimeout(() => ac.abort(new DOMException(`no reply in ${timeoutMs} ms`, "TimeoutError")), timeoutMs);
+  // Once a non-2xx status and headers are in, that reply is the outcome: if the deadline comes
+  // while its body is still being read, the attempt resolves with the head (empty body) rather
+  // than timing out, so a 429 or 5xx is still handled by its status and Retry-After.
+  let head: Response | undefined;
   return new Promise<Response>((resolve, reject) => {
-    const onAbort = () => reject(signal.reason);
+    const onAbort = () => (head ? resolve(head) : reject(signal.reason));
     signal.addEventListener("abort", onAbort, { once: true });
-    doFetch(signal)
+    doFetch(signal, (h) => (head = h))
       .then(resolve, reject)
       .finally(() => {
         clearTimeout(timer);
@@ -89,7 +99,7 @@ export function errorTag(status: number, code: string | undefined, retryAfter: s
 }
 
 export async function fetchWithRetry(
-  doFetch: (signal: AbortSignal) => Promise<Response>,
+  doFetch: DoFetch,
   opts: { idempotent: boolean; sleep?: (ms: number) => Promise<void>; timeoutMs?: number },
 ): Promise<{ res: Response; retries: number }> {
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
@@ -107,7 +117,7 @@ export async function fetchWithRetry(
       const s = (opts.timeoutMs ?? 0) / 1000;
       if (!opts.idempotent) {
         throw new FetchFailure(
-          `Notion API timeout: no reply in ${s} s [class=timeout; not repeated: this request may have landed in Notion. Read it back (e.g. GET /v1/pages/{id}) before trying again]`,
+          `Notion API timeout: no reply in ${s} s [class=timeout; not repeated: this request may have landed in Notion, or may still land after a delay. Check for it by a stable identifier (for a create, query for a unique property value); don't resend just because a first read-back shows nothing]`,
           "timeout",
         );
       }

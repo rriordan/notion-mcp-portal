@@ -1,7 +1,7 @@
 // Run with: npm test
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { notionRequest, READ_TIMEOUT_MS, SCHEMA_TTL_MS, schemaCache, timedFetch, timeoutFor, WRITE_TIMEOUT_MS } from "../src/notion.ts";
+import { notionRequest, READ_TIMEOUT_MS, responseText, SCHEMA_TTL_MS, schemaCache, timedFetch, timeoutFor, WRITE_TIMEOUT_MS } from "../src/notion.ts";
 import { classify, errorTag, fetchWithRetry, MAX_RETRIES, retryAfterSeconds } from "../src/retry.ts";
 
 const res = (status, headers = {}) => new Response("{}", { status, headers });
@@ -79,7 +79,12 @@ test("a read that times out is retried once, then fails with class=timeout", asy
 test("a write that times out is not re-sent and says it may have landed", async () => {
   let calls = 0;
   const doFetch = (signal) => (calls++, hang(signal));
-  await assert.rejects(fetchWithRetry(doFetch, { idempotent: false, sleep, timeoutMs: 20 }), /class=timeout.*may have landed.*Read it back/);
+  await assert.rejects(fetchWithRetry(doFetch, { idempotent: false, sleep, timeoutMs: 20 }), (e) => {
+    assert.match(e.message, /class=timeout.*may have landed.*may still land after a delay/);
+    assert.match(e.message, /stable identifier \(for a create, query for a unique property value\)/);
+    assert.match(e.message, /don't resend just because a first read-back shows nothing/);
+    return true;
+  });
   assert.equal(calls, 1);
 });
 
@@ -158,7 +163,7 @@ test("a 429 whose body stalls is retried as a 429 for a write, not reported as a
       const out = await fetchWithRetry(timedFetch(url, { method: "POST" }, 40), { idempotent: false, sleep, timeoutMs: 40 });
       assert.equal(out.res.status, 200);
       assert.equal(out.retries, 1);
-      assert.deepEqual(await out.res.json(), { ok: true });
+      assert.deepEqual(JSON.parse(await responseText(out.res)), { ok: true });
     },
   );
   assert.equal(calls, 2);
@@ -327,6 +332,66 @@ test("a non-2xx reply with no body still works", async () => {
       assert.equal(r.status, 502);
       assert.equal(await r.text(), "");
     },
+  );
+});
+
+test("a 429 whose headers arrive just before the deadline is retried as a 429, not a timeout", async () => {
+  // Frozen Date.now makes timedFetch think the whole attempt is left, so its error-body cap
+  // (20 ms) outlasts the attempt timer (40 ms, headers at ~30 ms): the deadline comes mid-body.
+  waits.length = 0;
+  const realNow = Date.now;
+  Date.now = () => 7_000_000;
+  let calls = 0;
+  const url = new URL("https://api.notion.com/v1/pages");
+  try {
+    await withFetch(
+      async () => {
+        if (++calls > 1) return new Response('{"ok":true}', { status: 200 });
+        await new Promise((r) => setTimeout(r, 30));
+        return stalled(429, { "Retry-After": "0" });
+      },
+      async () => {
+        const out = await fetchWithRetry(timedFetch(url, { method: "POST" }, 40), { idempotent: false, sleep, timeoutMs: 40 });
+        assert.equal(out.res.status, 200);
+        assert.equal(out.retries, 1);
+      },
+    );
+  } finally {
+    Date.now = realNow;
+  }
+  assert.equal(calls, 2);
+  assert.deepEqual(waits, [1000], "slept per Retry-After, not a timeout");
+});
+
+test("a body is decoded once: timedFetch returns headers only and carries the text", async () => {
+  const url = new URL("https://api.notion.com/v1/pages/p");
+  await withFetch(
+    async () => new Response('{"id":"p"}', { status: 200 }),
+    async () => {
+      const r = await timedFetch(url, { method: "GET" }, 40)(new AbortController().signal);
+      assert.equal(r.body, null, "no second copy of the body");
+      assert.equal(await responseText(r), '{"id":"p"}');
+    },
+  );
+  await withFetch(
+    async () => new Response('{"code":"validation_error","message":"bad"}', { status: 404 }),
+    async () => {
+      const r = await timedFetch(url, { method: "GET" }, 40)(new AbortController().signal);
+      assert.equal(r.body, null);
+      assert.equal(await responseText(r), '{"code":"validation_error","message":"bad"}');
+    },
+  );
+  // A Response timedFetch didn't make falls back to its own body.
+  assert.equal(await responseText(new Response("plain")), "plain");
+  // Through notionRequest: the 2xx data and the error body both arrive parsed.
+  const env = { NOTION_TOKEN: "t" };
+  await withFetch(
+    async () => new Response('{"id":"p","ok":true}', { status: 200 }),
+    async () => assert.deepEqual(await notionRequest(env, { method: "GET", path: "/v1/pages/p" }), { id: "p", ok: true }),
+  );
+  await withFetch(
+    async () => new Response('{"code":"object_not_found","message":"no such page"}', { status: 404 }),
+    () => assert.rejects(notionRequest(env, { method: "GET", path: "/v1/pages/p" }), /^Error: Notion API 404 object_not_found: no such page \[class=not_found/),
   );
 });
 
